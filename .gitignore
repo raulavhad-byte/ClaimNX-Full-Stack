@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Build and test output
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# Runtime logs and local tooling output
+.logs/
+*.log
+.codex_reporting_files.txt
+**/.git-nested-backup/
+
+# Supabase local CLI state
+supabase/.temp/
+
+# Local editor settings
+.idea/
