@@ -241,12 +241,18 @@ async function safe<T>(remote: Promise<T>, fallback: T): Promise<T> {
 const claimsResource = createLegacyResource('/v1/claims');
 export const claimsApi = {
   ...claimsResource,
-  getAll: async (hospitalId?: string) => ({
-    data: collectionFrom(
-      await safe(request(`/claims${hospitalId ? `?hospitalId=${encodeURIComponent(hospitalId)}` : ''}`), localArray('claimnx_claims')),
-      localArray('claimnx_claims'),
-    ),
-  }),
+  getAll: async (hospitalId?: string) => {
+    // The backend only accepts UUID hospital IDs and uses snake_case query
+    // parameters. Do not send legacy values such as H1 to the API.
+    if (hospitalId && !isUuid(hospitalId)) return { data: [] };
+    const query = hospitalId ? `?hospital_id=${encodeURIComponent(hospitalId)}` : '';
+    return {
+      data: collectionFrom(
+        await safe(request(`/claims${query}`), localArray('claimnx_claims')),
+        localArray('claimnx_claims'),
+      ),
+    };
+  },
   create: async (claim: any) => {
     const current = localArray('claimnx_claims');
     saveLocal('claimnx_claims', [...current, claim]);

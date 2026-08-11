@@ -73,6 +73,7 @@ import ReconciliationSystem from './components/ReconciliationSystem';
 import UserProfile from './components/UserProfile';
 import { Toaster, toast } from 'sonner';
 import { claimsApi, usersApi, patientsApi, configApi } from './services/api';
+import { claimnxSessionService } from './services/claimnx-session-service';
 import ReconciliationDashboard from './components/ReconciliationDashboard';
 import SalesDashboard from './components/SalesDashboard';
 import SalesManagerDashboard from './components/SalesManagerDashboard';
@@ -1242,7 +1243,7 @@ const AppContent: React.FC = () => {
   // Auto-refresh logic for Live Claims Tracker
   useEffect(() => {
     let interval: any;
-    if (isAuthenticated && isAuthReady && hospitalProfile.firebase_uid) {
+    if (isAuthenticated && isAuthReady && claimnxSessionService.getAccessToken()) {
       interval = setInterval(() => {
         if (window.location.pathname === '/live-tracker') {
           claimsApi.getAll((hospitalProfile.role?.toUpperCase() === 'SUPER ADMIN' || hospitalProfile.role?.toUpperCase() === 'ADMIN') ? undefined : getScopeId(hospitalProfile))
@@ -1252,11 +1253,11 @@ const AppContent: React.FC = () => {
       }, 60000);
     }
     return () => clearInterval(interval);
-  }, [isAuthenticated, isAuthReady, hospitalProfile, hospitalProfile.firebase_uid]);
+  }, [isAuthenticated, isAuthReady, hospitalProfile]);
 
   // Main API Data Sync
   useEffect(() => {
-    if (isAuthenticated && isAuthReady && hospitalProfile.firebase_uid) {
+    if (isAuthenticated && isAuthReady && claimnxSessionService.getAccessToken()) {
       const fetchData = async () => {
         try {
           // Load database-owned insurance master data first. A failure in an
@@ -1413,7 +1414,7 @@ const AppContent: React.FC = () => {
       };
       fetchData();
     }
-  }, [isAuthenticated, isAuthReady, hospitalProfile.hospitalId, hospitalProfile.role, hospitalProfile.firebase_uid]);
+  }, [isAuthenticated, isAuthReady, hospitalProfile.hospitalId, hospitalProfile.role]);
 
   // Auth Session State
   useEffect(() => {
