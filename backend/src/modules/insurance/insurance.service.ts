@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { DatabaseService } from '../../database/database.service';
 import { CreateInsuranceDto } from './dto/create-insurance.dto';
 import { UpdateInsuranceDto } from './dto/update-insurance.dto';
@@ -67,28 +68,67 @@ export class InsuranceService {
     return data;
   }
 
-  async create(dto: CreateInsuranceDto) {
+  async create(dto: CreateInsuranceDto, actorUserId: string) {
     const supabase = this.database.getClient();
 
-    console.log('====================================');
-    console.log('Insurance CREATE request');
-    console.log('Incoming DTO:', dto);
+    const partnerTypeCode = dto.type === 'TPA' ? 'TPA' : 'INSURER';
+    const [partnerTypeReferenceValueId, operationalStatusReferenceValueId] =
+      await Promise.all([
+        this.findReferenceValueId('INSURANCE_PARTNER_TYPE', partnerTypeCode),
+        this.findReferenceValueId('INSURANCE_PARTNER_STATUS', 'ACTIVE'),
+      ]);
+
+    const partnerCodePrefix = dto.name
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 36) || 'PARTNER';
+    const partnerCode = `${partnerCodePrefix}_${randomUUID().slice(0, 8)}`;
 
     const { data, error } = await supabase
       .from('insurance_entities')
-      .insert(dto)
+      .insert({
+        ...dto,
+        partner_code: partnerCode,
+        display_name: dto.name.trim(),
+        partner_type_reference_value_id: partnerTypeReferenceValueId,
+        operational_status_reference_value_id: operationalStatusReferenceValueId,
+        created_by: actorUserId,
+        updated_by: actorUserId,
+        is_deleted: false,
+        version: 1,
+      })
       .select()
       .single();
-
-    console.log('Inserted Data:', data);
-    console.log('Supabase Error:', error);
-    console.log('====================================');
 
     if (error) {
       throw error;
     }
 
     return data;
+  }
+
+  private async findReferenceValueId(categoryCode: string, valueCode: string): Promise<string> {
+    const { data, error } = await this.database
+      .getClient()
+      .from('reference_values')
+      .select('id, reference_categories!inner(code)')
+      .eq('reference_categories.code', categoryCode)
+      .eq('code', valueCode)
+      .is('organization_id', null)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .eq('is_deleted', false)
+      .maybeSingle<{ id: string }>();
+
+    if (error || !data) {
+      throw new Error(
+        `Required insurance reference value ${categoryCode}/${valueCode} is unavailable.`,
+      );
+    }
+
+    return data.id;
   }
 
   async update(id: string, dto: UpdateInsuranceDto) {

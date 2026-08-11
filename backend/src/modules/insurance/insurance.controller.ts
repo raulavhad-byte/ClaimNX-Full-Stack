@@ -7,8 +7,10 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 
 import { InsuranceService } from './insurance.service';
 import { CreateInsuranceDto } from './dto/create-insurance.dto';
@@ -35,8 +37,8 @@ export class InsuranceController {
   }
 
   @Post()
-  create(@Body() dto: CreateInsuranceDto) {
-    return this.insuranceService.create(dto);
+  create(@Body() dto: CreateInsuranceDto, @Req() request: Request) {
+    return this.insuranceService.create(dto, (request as any).user.id);
   }
 
   @Patch(':id')
