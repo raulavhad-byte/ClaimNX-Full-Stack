@@ -71,8 +71,7 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
       'tab_digital_assets': 'administration:hospital:assets',
       'tab_nhcx_onboarding': 'administration:hospital:nhcx',
       'tab_email_integration': 'administration:hospital:email',
-      'tab_wallet_billing': 'administration:hospital:billing',
-      'tab_bar': 'ui_access:tab_bar'
+      'tab_wallet_billing': 'administration:hospital:billing'
     };
 
     const moduleId = navToModuleMap[key] || key;
@@ -94,6 +93,15 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
   }, [permissions, user]);
 
   const [activeMainTab, setActiveMainTab] = useState<MainTab>(visibleTabs[0] || 'Hospital Profile');
+
+  // Roles grant access to individual Hospital Management tabs. The tab bar is
+  // only the navigation between those granted tabs, so it must not require a
+  // second, unrelated UI permission.
+  useEffect(() => {
+    if (!visibleTabs.includes(activeMainTab)) {
+      setActiveMainTab(visibleTabs[0] || 'Hospital Profile');
+    }
+  }, [activeMainTab, visibleTabs]);
   const [profileSubTab, setProfileSubTab] = useState<ProfileSubTab>('Basic Details');
   const [isEditingBasic, setIsEditingBasic] = useState(false);
   const [isEditingAccount, setIsEditingAccount] = useState(false);
@@ -692,7 +700,7 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative">
-      {canAccess('tab_bar') && visibleTabs.length > 0 && (
+      {visibleTabs.length > 0 && (
         <nav className="bg-white border-b border-slate-200 px-8 flex items-center space-x-8 h-14 shrink-0 shadow-sm z-10 overflow-x-auto no-scrollbar">
           {visibleTabs.map(tab => (
             <button 
