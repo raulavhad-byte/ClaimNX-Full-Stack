@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -378,20 +379,64 @@ await this.auditService.log({
   }));
 }
 
-/**
- * Create User
- *
- * Enterprise implementation will be added later.
- */
-async createUser(
-  createUserDto: CreateUserDto,
-) {
-  return {
-    message:
-      'Create User implementation will be added in the next phase.',
-    data: createUserDto,
-  };
-}
+  /**
+   * Creates the Supabase Auth identity and matching ClaimNX user record.
+   *
+   * The Supabase service-role client is deliberately used only on the server.
+   * If the application-record insert fails, the Auth identity is deleted so a
+   * partial account cannot be left behind.
+   */
+  async createUser(createUserDto: CreateUserDto) {
+    const client = this.databaseService.getClient();
+    const { email, password, displayName, role, roleId, hospitalId, mobileNo } =
+      createUserDto;
+
+    const { data: authData, error: authError } =
+      await client.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: { display_name: displayName },
+      });
+
+    if (authError || !authData.user) {
+      throw new BadRequestException(
+        authError?.message ?? 'Unable to create the user authentication account.',
+      );
+    }
+
+    const { data: user, error: userError } = await client
+      .from('users')
+      .insert({
+        auth_user_id: authData.user.id,
+        email,
+        display_name: displayName,
+        role: role ?? 'Hospital',
+        role_id: roleId ?? null,
+        hospital_id: hospitalId ?? null,
+        mobile_no: mobileNo ?? null,
+        status: 'Active',
+        is_deleted: false,
+      })
+      .select()
+      .single();
+
+    if (userError || !user) {
+      const { error: cleanupError } = await client.auth.admin.deleteUser(
+        authData.user.id,
+      );
+      if (cleanupError) {
+        // The primary database error is still the actionable failure. The
+        // orphaned Auth user must be removed manually if this cleanup fails.
+        console.error('Unable to remove orphaned Supabase Auth user', cleanupError);
+      }
+      throw new BadRequestException(
+        userError?.message ?? 'Unable to create the ClaimNX user record.',
+      );
+    }
+
+    return user;
+  }
 
 /**
  * Current Logged-in User

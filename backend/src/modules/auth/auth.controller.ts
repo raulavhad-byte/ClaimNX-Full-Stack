@@ -118,6 +118,8 @@ async logoutOtherSessions(
   /**
    * Create User
    */
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('users.create')
   @Post('create-user')
   async createUser(
     @Body()

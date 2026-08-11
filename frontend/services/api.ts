@@ -147,6 +147,40 @@ function saveLocal(key: string, value: any[]): void {
   try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage is optional */ }
 }
 
+function isUuid(value: unknown): value is string {
+  return typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function toPortalUser(user: any): any {
+  return {
+    ...user,
+    displayName: user?.displayName ?? user?.display_name ?? '',
+    emailId: user?.emailId ?? user?.email ?? '',
+    mobileNo: user?.mobileNo ?? user?.mobile_no ?? '',
+    hospitalId: user?.hospitalId ?? user?.hospital_id ?? '',
+    roleId: user?.roleId ?? user?.role_id ?? undefined,
+  };
+}
+
+function toUserRequestPayload(user: any, includePassword: boolean): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    email: user?.emailId ?? user?.email,
+    displayName: user?.displayName ?? user?.display_name,
+    role: user?.role,
+    roleId: user?.roleId ?? user?.role_id,
+    mobileNo: user?.mobileNo ?? user?.mobile_no,
+  };
+
+  const hospitalId = user?.hospitalId ?? user?.hospital_id;
+  if (isUuid(hospitalId)) payload.hospitalId = hospitalId;
+  if (includePassword && user?.password) payload.password = user.password;
+
+  return Object.fromEntries(
+    Object.entries(payload).filter(([, value]) => value !== undefined && value !== ''),
+  );
+}
+
 async function safe<T>(remote: Promise<T>, fallback: T): Promise<T> {
   try { return await remote; } catch (error) {
     console.warn('[ClaimNX] API unavailable; using local data.', error);
@@ -187,11 +221,32 @@ export const usersApi = {
     data: collectionFrom(
       await safe(request('/users'), localArray('claimnx_hospital_users')),
       localArray('claimnx_hospital_users'),
-    ),
+    ).map(toPortalUser),
   }),
-  create: async (user: any) => { const all = [...localArray('claimnx_hospital_users'), user]; saveLocal('claimnx_hospital_users', all); return { data: user }; },
-  update: async (id: string, user: any) => { const all = localArray('claimnx_hospital_users').map((item) => item.id === id ? { ...item, ...user } : item); saveLocal('claimnx_hospital_users', all); return { data: user }; },
-  delete: async (id: string) => { saveLocal('claimnx_hospital_users', localArray('claimnx_hospital_users').filter((item) => item.id !== id)); return { data: null }; },
+  create: async (user: any) => {
+    const created = toPortalUser(await request('/users', {
+      method: 'POST',
+      body: JSON.stringify(toUserRequestPayload(user, true)),
+    }));
+    const portalUser = { ...user, ...created, password: undefined };
+    saveLocal('claimnx_hospital_users', [...localArray('claimnx_hospital_users'), portalUser]);
+    return { data: portalUser };
+  },
+  update: async (id: string, user: any) => {
+    const updated = toPortalUser(await request(`/users/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(toUserRequestPayload(user, false)),
+    }));
+    const portalUser = { ...user, ...updated, password: undefined };
+    const all = localArray('claimnx_hospital_users').map((item) => item.id === id ? portalUser : item);
+    saveLocal('claimnx_hospital_users', all);
+    return { data: portalUser };
+  },
+  delete: async (id: string) => {
+    await request(`/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    saveLocal('claimnx_hospital_users', localArray('claimnx_hospital_users').filter((item) => item.id !== id));
+    return { data: null };
+  },
   sync: async (user: any) => ({ data: user }),
 };
 
