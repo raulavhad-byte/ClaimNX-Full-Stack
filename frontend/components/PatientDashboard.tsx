@@ -1095,6 +1095,21 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
 
   const rateList = useMemo(() => {
     if (!hospitalProfile?.portalCredentials || !latestClaim) return null;
+    const credentials = hospitalProfile.portalCredentials;
+    // Historic configurations keyed payer credentials by display name. Names
+    // can differ only in case, punctuation, or legal suffixes between an
+    // admission and the configuration screen, so never use strict equality
+    // alone for a rate-list lookup.
+    const normalizePayer = (value: unknown) => String(value ?? '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+    const findCredential = (provider: unknown) => {
+      const normalizedProvider = normalizePayer(provider);
+      return credentials.find((credential: any) => credential.rateListData && (
+        credential.entityId === provider ||
+        normalizePayer(credential.entityId) === normalizedProvider
+      ));
+    };
     
     const psuInsurers = [
       "New India Assurance",
@@ -1126,15 +1141,11 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
     }
     
     // Find rate list for the determined provider
-    const cred = hospitalProfile.portalCredentials.find((cred: any) => 
-      cred.entityId === providerToSearch && cred.rateListData
-    );
+    const cred = findCredential(providerToSearch);
     
     // If it's NOT a PSU and TPA rate list wasn't found, try fallback to direct insurance
     if (!isPSU && !cred && providerToSearch !== insuranceCompany) {
-       return hospitalProfile.portalCredentials.find((cred: any) => 
-         cred.entityId === insuranceCompany && cred.rateListData
-       );
+       return findCredential(insuranceCompany);
     }
     
     return cred;

@@ -599,6 +599,17 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
 
   const rateList = useMemo(() => {
     if (!claim || !hospitalProfile) return null;
+    const credentials = hospitalProfile.portalCredentials || [];
+    const normalizePayer = (value: unknown) => String(value ?? '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+    const findCredential = (provider: unknown) => {
+      const normalizedProvider = normalizePayer(provider);
+      return credentials.find((credential: any) => credential.rateListData && (
+        credential.entityId === provider ||
+        normalizePayer(credential.entityId) === normalizedProvider
+      ));
+    };
 
     const insurerName = claim.insuranceProvider;
     const tpaName = claim.formData?.tpa_provider;
@@ -607,16 +618,12 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
     // If it's a TPA case, only show rate list if insurer is one of the national insurers
     if (isTpaCase) {
       if (!NATIONAL_INSURERS.includes(insurerName)) return null;
-      const tpaCreds = hospitalProfile.portalCredentials?.find(
-        (pc) => pc.entityId === tpaName,
-      );
+      const tpaCreds = findCredential(tpaName);
       if (tpaCreds?.rateListData) return tpaCreds;
     }
 
     // Default: Show Insurer's rate list
-    const insurerCreds = hospitalProfile.portalCredentials?.find(
-      (pc) => pc.entityId === insurerName,
-    );
+    const insurerCreds = findCredential(insurerName);
     return insurerCreds?.rateListData ? insurerCreds : null;
   }, [claim, hospitalProfile]);
 
