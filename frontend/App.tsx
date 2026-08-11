@@ -1238,16 +1238,34 @@ const AppContent: React.FC = () => {
           setInsurers(insurersRes.data.filter((e: any) => e.type === 'Insurer'));
           setTpas(insurersRes.data.filter((e: any) => e.type === 'TPA'));
 
-          const [claimsRes, usersRes, rolesRes, fieldsRes] = await Promise.all([
+          const sessionUser = claimnxSessionService.getSession()?.user as Record<string, unknown> | undefined;
+          const sessionRole = String(sessionUser?.role ?? hospitalProfile.role ?? '').trim().toUpperCase();
+          const canLoadAdministrationData = [
+            'SUPER ADMIN',
+            'ADMIN',
+            'PRIMARY ADMIN',
+          ].includes(sessionRole);
+
+          const [claimsRes, fieldsRes] = await Promise.all([
             claimsApi.getAll((hospitalProfile.role?.toUpperCase() === 'SUPER ADMIN' || hospitalProfile.role?.toUpperCase() === 'ADMIN') ? undefined : getScopeId(hospitalProfile)),
-            usersApi.getAll(),
-            configApi.getRoles(),
             configApi.getFields()
           ]);
           setClaims(claimsRes.data);
-          setHospitalUsers(usersRes.data);
-          
-          setRoles(rolesRes.data);
+
+          // /users and /roles are system-administration resources. A normal
+          // portal user must not request them during login, because the API
+          // correctly rejects that request with 403.
+          if (canLoadAdministrationData) {
+            const [usersRes, rolesRes] = await Promise.all([
+              usersApi.getAll(),
+              configApi.getRoles(),
+            ]);
+            setHospitalUsers(usersRes.data);
+            setRoles(rolesRes.data);
+          } else {
+            setHospitalUsers([]);
+            setRoles([]);
+          }
           
           setFields(fieldsRes.data);
 
@@ -1827,9 +1845,20 @@ const AppContent: React.FC = () => {
     // Authentication is primarily handled by Firebase and usersApi.sync in App.tsx
     // We update the local profile for immediate UI feedback if found, 
     // but the source of truth for isAuthenticated remains onAuthStateChanged.
-    let matchedUser = hospitalUsers.find(u => u.username === username);
+    const sessionUser = claimnxSessionService.getSession()?.user as Record<string, unknown> | undefined;
+    let matchedUser = hospitalUsers.find(u => u.username === username || u.emailId === username);
     if (matchedUser) {
       setHospitalProfile(matchedUser);
+    } else if (sessionUser) {
+      setHospitalProfile((current) => ({
+        ...current,
+        id: String(sessionUser.id ?? current.id),
+        username,
+        emailId: String(sessionUser.email ?? username),
+        displayName: String(sessionUser.display_name ?? username.split('@')[0]),
+        role: String(sessionUser.role ?? current.role),
+        status: 'Active',
+      }));
     } else if (username === 'raulavhad@gmail.com') {
       const primaryAdmin: HospitalUser = {
         id: 'primary-admin',
