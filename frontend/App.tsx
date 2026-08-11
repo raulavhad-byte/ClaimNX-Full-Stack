@@ -1360,9 +1360,13 @@ const AppContent: React.FC = () => {
 
   // Auth Session State
   useEffect(() => {
-    const manualAuth = localStorage.getItem('claimnx_manual_auth');
-    if (manualAuth) {
+    // The local key identifies the last user only; a valid API session token
+    // is required before rendering the authenticated application shell.
+    if (localStorage.getItem('claimnx_manual_auth') && claimnxSessionService.getAccessToken()) {
       setIsAuthenticated(true);
+    } else {
+      localStorage.removeItem('claimnx_manual_auth');
+      setIsAuthenticated(false);
     }
     setIsAuthReady(true);
   }, []);
@@ -1370,7 +1374,7 @@ const AppContent: React.FC = () => {
   // Manual session recovery
   useEffect(() => {
     const manualEmail = localStorage.getItem('claimnx_manual_auth');
-    if (manualEmail) {
+    if (manualEmail && claimnxSessionService.getAccessToken()) {
       if (hospitalUsers.length > 0) {
         const matchedUser = hospitalUsers.find(u => u.username === manualEmail);
         if (matchedUser) {
@@ -1925,6 +1929,7 @@ const AppContent: React.FC = () => {
   
   const handleLogout = () => { 
     localStorage.removeItem('claimnx_manual_auth');
+    claimnxSessionService.clear();
     setIsAuthenticated(false); 
   };
 
@@ -2016,7 +2021,7 @@ const AppContent: React.FC = () => {
        }
      }
      return perms;
-  }, [hospitalProfile.role, roles]);
+  }, [hospitalProfile.role, hospitalProfile.permissions, roles]);
 
 
   
@@ -2452,8 +2457,11 @@ const AppContent: React.FC = () => {
             onClick={() => setIsSidebarOpen(false)}
           />
         )}
-        {canAccess('sidebar') && (
-          <aside className={`bg-white border-r border-slate-200 transition-all duration-300 flex flex-col shrink-0 z-50 no-print print:hidden fixed lg:static h-full ${isSidebarOpen ? 'w-[280px] translate-x-0' : 'w-64 -translate-x-full lg:w-20 lg:translate-x-0'}`}>
+        {/* The sidebar is application chrome, not a permissioned module. Each
+            individual link below remains permission-checked. Gating the
+            container by an unmapped `sidebar` permission stranded non-admin
+            users behind a menu button with nothing to open. */}
+        <aside className={`bg-white border-r border-slate-200 transition-all duration-300 flex flex-col shrink-0 z-50 no-print print:hidden fixed lg:static h-full ${isSidebarOpen ? 'w-[280px] translate-x-0' : 'w-64 -translate-x-full lg:w-20 lg:translate-x-0'}`}>
             <div className={`flex items-center overflow-hidden relative transition-all duration-300 ${isSidebarOpen ? 'p-6 space-x-3' : 'p-5 justify-center'}`}>
               <div className="w-10 h-10 shrink-0 relative filter drop-shadow-sm">
                    <svg viewBox="0 0 100 100" className="w-full h-full">
@@ -2615,7 +2623,6 @@ const AppContent: React.FC = () => {
               )}
             </nav>
           </aside>
-        )}
 
         <main className="flex-1 flex flex-col min-w-0 relative h-full print:h-auto print:block print:overflow-visible">
           <SystemAnnouncementsBanner currentUser={hospitalProfile} />
