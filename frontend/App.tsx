@@ -1231,13 +1231,9 @@ const AppContent: React.FC = () => {
     if (isAuthenticated && isAuthReady && claimnxSessionService.getAccessToken()) {
       const fetchData = async () => {
         try {
-          // Load database-owned insurance master data first. A failure in an
-          // unrelated module (such as claim filtering) must not restore the
-          // old frontend seed list in the Connectors screen.
-          const insurersRes = await configApi.getInsurers();
-          setInsurers(insurersRes.data.filter((e: any) => e.type === 'Insurer'));
-          setTpas(insurersRes.data.filter((e: any) => e.type === 'TPA'));
-
+          // Validate the JWT-backed session before loading any protected
+          // portal resource. This prevents a stale dashboard from rendering
+          // after the server revokes a session.
           const authenticatedUser = await authApi.getMe();
           setHospitalProfile((current) => ({
             ...current,
@@ -1252,6 +1248,13 @@ const AppContent: React.FC = () => {
               ? authenticatedUser.permissions
               : [],
           }));
+
+          // Load database-owned insurance master data first. A failure in an
+          // unrelated module (such as claim filtering) must not restore the
+          // old frontend seed list in the Connectors screen.
+          const insurersRes = await configApi.getInsurers();
+          setInsurers(insurersRes.data.filter((e: any) => e.type === 'Insurer'));
+          setTpas(insurersRes.data.filter((e: any) => e.type === 'TPA'));
 
           const sessionUser = claimnxSessionService.getSession()?.user as Record<string, unknown> | undefined;
           const sessionRole = String(sessionUser?.role ?? hospitalProfile.role ?? '').trim().toUpperCase();
@@ -1357,6 +1360,17 @@ const AppContent: React.FC = () => {
       fetchData();
     }
   }, [isAuthenticated, isAuthReady, hospitalProfile.hospitalId, hospitalProfile.role]);
+
+  useEffect(() => {
+    const handleExpiredSession = () => {
+      claimnxSessionService.clear();
+      localStorage.removeItem('claimnx_manual_auth');
+      setIsAuthenticated(false);
+      toast.error('Your session has expired. Please sign in again.');
+    };
+    window.addEventListener('claimnx:session-expired', handleExpiredSession);
+    return () => window.removeEventListener('claimnx:session-expired', handleExpiredSession);
+  }, []);
 
   // Auth Session State
   useEffect(() => {

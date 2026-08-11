@@ -40,11 +40,15 @@ class ClaimNXSessionService {
   }
 
   save(session: ClaimNXSession): void {
+    // Remove a token created by the pre-session implementation so API calls
+    // cannot accidentally use a revoked credential after a new login.
+    localStorage.removeItem('claimnx_access_token');
     sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
   }
 
   clear(): void {
     sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    localStorage.removeItem('claimnx_access_token');
   }
 
   async login(email: string, password: string): Promise<ClaimNXSession> {

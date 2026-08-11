@@ -18,14 +18,17 @@ const strictApiMode = import.meta.env.VITE_CLAIMNX_STRICT_API === 'true';
 
 function getAccessToken(): string | undefined {
   try {
-    const legacyToken = window.localStorage.getItem('claimnx_access_token');
-    if (legacyToken) return legacyToken;
-
+    // The current signed-in session is authoritative. Older builds stored a
+    // token in localStorage; preferring it can send an already-revoked token
+    // immediately after a successful new login.
     const session = sessionStorage.getItem('claimnx.session.v1');
     if (session) {
       const parsed = JSON.parse(session) as { accessToken?: unknown };
       return typeof parsed.accessToken === 'string' ? parsed.accessToken : undefined;
     }
+
+    const legacyToken = window.localStorage.getItem('claimnx_access_token');
+    if (legacyToken) return legacyToken;
   } catch {
     // Local-only mode is allowed to continue with storage-backed data.
   }
@@ -84,6 +87,12 @@ async function request(path: string, init: RequestInit = {}): Promise<any> {
   }
 
   if (!response.ok) {
+    if (response.status === 401) {
+      sessionStorage.removeItem('claimnx.session.v1');
+      localStorage.removeItem('claimnx_access_token');
+      localStorage.removeItem('claimnx_manual_auth');
+      window.dispatchEvent(new Event('claimnx:session-expired'));
+    }
     const message =
       typeof responseBody === 'object' &&
       responseBody !== null &&
