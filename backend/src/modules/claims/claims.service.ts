@@ -1,7 +1,9 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 
 import { DatabaseService } from '../../database/database.service';
 
@@ -20,7 +22,10 @@ export class ClaimsService {
   }
 
   async create(createClaimDto: CreateClaimDto, actorUserId: string) {
-    const hospital = await this.requireHospitalContext(createClaimDto.hospital_id);
+    const hospital = await this.requireHospitalContext(
+      createClaimDto.hospital_id,
+      actorUserId,
+    );
     const [productReferenceId, claimTypeReferenceId, lifecycleReferenceId] = await Promise.all([
       this.requireReferenceValue('CLAIM_PRODUCT', 'CPC'),
       this.requireReferenceValue('CLAIM_TYPE', 'CASHLESS'),
@@ -50,19 +55,103 @@ export class ClaimsService {
     return data;
   }
 
-  private async requireHospitalContext(hospitalId: string): Promise<{ organization_id: string }> {
+  private async requireHospitalContext(
+    hospitalId: string,
+    actorUserId: string,
+  ): Promise<{ id: string; organization_id: string }> {
     const { data, error } = await this.supabase
       .from('hospitals')
-      .select('organization_id')
+      .select('id, organization_id')
       .eq('id', hospitalId)
       .eq('is_deleted', false)
-      .maybeSingle<{ organization_id: string }>();
+      .maybeSingle<{ id: string; organization_id: string }>();
 
     if (error) throw error;
-    if (!data?.organization_id) {
-      throw new NotFoundException('The selected hospital does not have an active organization assignment.');
+    if (data?.organization_id) {
+      return data;
     }
-    return data;
+
+    // Legacy Hospital Onboarding created a user profile but did not create the
+    // corresponding hospitals row. Provision that missing database hospital
+    // only for a Hospital entity, then permanently link the user to it.
+    const { data: hospitalUser, error: userError } = await this.supabase
+      .from('users')
+      .select('id, display_name, email, mobile_no, role, entity_type, profile_data')
+      .eq('id', hospitalId)
+      .eq('is_deleted', false)
+      .maybeSingle<{
+        id: string;
+        display_name: string;
+        email: string;
+        mobile_no: string | null;
+        role: string | null;
+        entity_type: string | null;
+        profile_data: Record<string, unknown> | null;
+      }>();
+
+    if (userError) throw userError;
+    const isHospitalProfile = hospitalUser?.entity_type === 'Hospital' ||
+      /^hospital\b/i.test(hospitalUser?.role ?? '');
+    if (!hospitalUser || !isHospitalProfile) {
+      throw new NotFoundException(
+        'The selected hospital does not have an active organization assignment.',
+      );
+    }
+
+    const { data: organizations, error: organizationError } = await this.supabase
+      .from('organizations')
+      .select('id')
+      .eq('status', 'ACTIVE')
+      .eq('is_deleted', false)
+      .limit(2);
+    if (organizationError) throw organizationError;
+    if (!organizations || organizations.length !== 1) {
+      throw new BadRequestException(
+        'Hospital onboarding requires exactly one active organization. Assign this hospital to an organization before creating a claim.',
+      );
+    }
+
+    const profile = hospitalUser.profile_data ?? {};
+    const hospitalName = String(profile.hospitalName ?? hospitalUser.display_name ?? '').trim();
+    if (!hospitalName) {
+      throw new BadRequestException('The Hospital profile needs a hospital name before creating a claim.');
+    }
+
+    const { data: createdHospital, error: createHospitalError } = await this.supabase
+      .from('hospitals')
+      .insert({
+        organization_id: organizations[0].id,
+        hospital_name: hospitalName,
+        display_name: hospitalName,
+        hospital_code: `HOSP-${randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase()}`,
+        rohini_id: profile.rohiniId ? String(profile.rohiniId) : null,
+        address: profile.address ? String(profile.address) : null,
+        district: profile.district ? String(profile.district) : null,
+        state: profile.state ? String(profile.state) : null,
+        email: hospitalUser.email,
+        phone: hospitalUser.mobile_no,
+        status: 'ACTIVE',
+        created_by: actorUserId,
+        updated_by: actorUserId,
+        is_deleted: false,
+        version: 1,
+      })
+      .select('id, organization_id')
+      .single<{ id: string; organization_id: string }>();
+
+    if (createHospitalError || !createdHospital) {
+      throw new BadRequestException(
+        createHospitalError?.message ?? 'Unable to create the missing Hospital database profile.',
+      );
+    }
+
+    const { error: linkError } = await this.supabase
+      .from('users')
+      .update({ hospital_id: createdHospital.id, updated_at: new Date().toISOString() })
+      .eq('id', hospitalUser.id);
+    if (linkError) throw linkError;
+
+    return createdHospital;
   }
 
   private async requireReferenceValue(categoryCode: string, valueCode: string): Promise<string> {

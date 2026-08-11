@@ -2382,11 +2382,24 @@ const AppContent: React.FC = () => {
           product: claim.product,
         },
       });
+      const persistedHospitalId = isUuid(res.data?.hospital_id)
+        ? res.data.hospital_id
+        : resolvedHospitalId;
+      if (persistedHospitalId !== hospitalProfile.hospitalId) {
+        setHospitalProfile((current) => ({
+          ...current,
+          hospitalId: persistedHospitalId,
+        }));
+      }
       const newClaim: Claim = {
         ...claim,
         id: res.data?.id ?? finalId,
         patientId,
-        hospitalId: resolvedHospitalId,
+        hospitalId: persistedHospitalId,
+        formData: {
+          ...claim.formData,
+          hospitalId: persistedHospitalId,
+        },
       };
 
       // Ensure absolutely no duplicate claims in frontend state

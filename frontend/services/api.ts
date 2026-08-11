@@ -367,6 +367,47 @@ function toRoleRequestPayload(role: any): Record<string, unknown> {
   };
 }
 
+const databaseClaimStatusMap: Record<string, string> = {
+  DRAFT: 'Draft',
+  READY_FOR_REVIEW: 'Pending Medical Review',
+  PENDING_MEDICAL_REVIEW: 'Pending Medical Review',
+  PENDING_MEDICAL_TEAM: 'Pending Medical Team',
+  PRE_AUTH_INITIATED: 'Pre Auth initiated',
+  PRE_AUTH_APPROVED: 'Pre Auth Approved',
+  PRE_AUTH_REJECTED: 'Pre Auth Rejected',
+  INITIAL_QUERY_PENDING: 'Initial Query Pending',
+  DISCHARGE_INITIATED: 'Discharge Initiated',
+  DISCHARGE_APPROVED: 'Discharged Approved',
+};
+
+function toPortalClaim(claim: any): any {
+  const formData = claim?.formData ?? claim?.form_data ?? {};
+  const status = String(claim?.status ?? '');
+  const product = claim?.product ?? formData?.product ?? 'CPC';
+
+  return {
+    ...claim,
+    id: claim?.id ?? '',
+    caseReferenceId: claim?.caseReferenceId ?? claim?.case_ref_id ?? claim?.claim_number ?? '',
+    patientId: claim?.patientId ?? claim?.patient_id ?? '',
+    patientName: claim?.patientName ?? formData?.p_name ?? formData?.patient_name ?? 'Unknown Patient',
+    hospitalId: claim?.hospitalId ?? claim?.hospital_id ?? formData?.hospitalId ?? '',
+    insuranceProvider: claim?.insuranceProvider ?? formData?.insurance_company ?? '',
+    policyNumber: claim?.policyNumber ?? formData?.p_policy_no ?? formData?.policyNumber ?? '',
+    estimatedCost: Number(claim?.estimatedCost ?? claim?.estimated_cost ?? claim?.amount ?? 0),
+    admissionDate: claim?.admissionDate ?? claim?.admission_date ?? '',
+    claimType: claim?.claimType ?? formData?.claimType ?? 'Cashless',
+    product,
+    status: databaseClaimStatusMap[status] ?? claim?.status ?? 'Draft',
+    formData: {
+      ...formData,
+      hospitalId: claim?.hospital_id ?? formData?.hospitalId ?? '',
+      product,
+    },
+    history: Array.isArray(claim?.history) ? claim.history : [],
+  };
+}
+
 async function safe<T>(remote: Promise<T>, fallback: T): Promise<T> {
   try { return await remote; } catch (error) {
     if (strictApiMode) throw error;
@@ -387,7 +428,7 @@ export const claimsApi = {
       data: collectionFrom(
         await safe(request(`/claims${query}`), localArray('claimnx_claims')),
         localArray('claimnx_claims'),
-      ),
+      ).map(toPortalClaim),
     };
   },
   create: async (claim: any) => {
