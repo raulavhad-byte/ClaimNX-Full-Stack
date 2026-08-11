@@ -941,6 +941,7 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
                       const credential = formData.portalCredentials?.find(c => c.entityId === entity.name) as any;
                       const hasTieUp = !!credential;
                       const isExpanded = expandedEntityId === entity.name;
+                      const isRateListUploading = savingEntityId === `upload-${entity.name}`;
                       return (
                          <div key={entity.id} className={`p-6 rounded-3xl border transition-all ${hasTieUp ? 'bg-emerald-50/20 border-emerald-200 shadow-sm' : 'bg-white border-slate-200 hover:border-slate-300'}`}>
                             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -980,7 +981,25 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
                                               <div className="flex items-center gap-3"><button onClick={() => openRateListPreview(entity.name, credential)} className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:underline flex items-center gap-1"><Search size={12} /> View</button><button onClick={() => downloadRateList(credential)} className="text-[10px] font-black text-emerald-600 uppercase tracking-widest hover:underline flex items-center gap-1"><Download size={12} /> Download</button></div>
                                            )}
                                         </div>
-                                        <div className="relative group"><input type="file" id={`rate-list-${entity.id}`} className="hidden" onChange={(e) => handleRateListUpload(entity.name, e)} /><label htmlFor={`rate-list-${entity.id}`} className="flex flex-col items-center justify-center w-full h-[90px] border-2 border-dashed border-slate-300 rounded-2xl cursor-pointer bg-slate-50 hover:bg-white">{credential?.rateListName ? <div className="flex items-center space-x-2 text-emerald-600"><CheckCircle2 size={16} /><span className="text-[10px] font-bold truncate max-w-[120px]">{credential.rateListName}</span></div> : <><Upload size={18} className="text-slate-400 mb-1" /><span className="text-[9px] font-bold text-slate-400 uppercase">Upload PDF/Excel</span></>}</label></div>
+                                        <div className="relative group">
+                                          <input type="file" id={`rate-list-${entity.id}`} className="hidden" disabled={isRateListUploading} onChange={(e) => handleRateListUpload(entity.name, e)} />
+                                          <label
+                                            htmlFor={isRateListUploading ? undefined : `rate-list-${entity.id}`}
+                                            className={`flex flex-col items-center justify-center w-full h-[90px] border-2 border-dashed rounded-2xl bg-slate-50 transition-colors ${isRateListUploading ? 'border-blue-300 cursor-wait' : 'border-slate-300 cursor-pointer hover:bg-white'}`}
+                                          >
+                                            {isRateListUploading ? (
+                                              <div className="flex flex-col items-center text-blue-600" role="status" aria-live="polite">
+                                                <Loader2 size={22} className="animate-spin mb-2" />
+                                                <span className="text-[10px] font-black uppercase tracking-widest">Uploading rate list...</span>
+                                                <span className="text-[9px] font-bold text-slate-400 mt-1">Please keep this page open</span>
+                                              </div>
+                                            ) : credential?.rateListName ? (
+                                              <div className="flex items-center space-x-2 text-emerald-600"><CheckCircle2 size={16} /><span className="text-[10px] font-bold truncate max-w-[120px]">{credential.rateListName}</span></div>
+                                            ) : (
+                                              <><Upload size={18} className="text-slate-400 mb-1" /><span className="text-[9px] font-bold text-slate-400 uppercase">Upload PDF/Excel</span></>
+                                            )}
+                                          </label>
+                                        </div>
                                      </div>
                                   </div>
                                   <div className="flex justify-end mt-4 pt-4 border-t border-slate-100 border-dashed">
