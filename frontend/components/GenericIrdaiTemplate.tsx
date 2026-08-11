@@ -9,8 +9,8 @@ interface GenericIrdaiTemplateProps {
 const DashedLineField: React.FC<{ label: string; value: string; className?: string; subLabel?: string; bold?: boolean }> = ({ label, value, className = "", subLabel, bold = true }) => (
   <div className={`flex items-end mt-1 ${className}`}>
     <span className="text-[9px] font-bold text-black whitespace-nowrap mr-2 uppercase tracking-tight">{label}</span>
-    <div className="flex-1 border-b border-dashed border-slate-400 pb-0.5 flex items-end min-h-[14px]">
-      <span className={`text-[10px] uppercase truncate ${bold ? 'font-black text-blue-700' : 'font-medium text-blue-600'}`}>{value}</span>
+    <div className="flex-1 min-w-0 border-b border-dashed border-slate-400 pb-0.5 flex items-end min-h-[14px]">
+      <span className={`text-[10px] uppercase break-words ${bold ? 'font-black text-blue-700' : 'font-medium text-blue-600'}`}>{value}</span>
     </div>
     {subLabel && <span className="text-[7.5px] font-bold text-slate-500 whitespace-nowrap ml-2">{subLabel}</span>}
   </div>

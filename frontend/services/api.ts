@@ -156,6 +156,34 @@ function isUuid(value: unknown): value is string {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+/**
+ * Claim PDFs, scans and image stamps can be several megabytes.  They belong
+ * in object storage, not in the JSON request sent to the claims table.  Keep
+ * their metadata with the claim while refusing to send inline base64 content
+ * through the API (which otherwise produces PostgREST's "request entity too
+ * large" error).
+ */
+function withoutInlineClaimFiles(value: unknown, key?: string): unknown {
+  if (key === 'data' || key === 'fileData' || key === 'hospitalSeal' || key === 'doctorStamp') {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => withoutInlineClaimFiles(item));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .map(([entryKey, entryValue]) => [entryKey, withoutInlineClaimFiles(entryValue, entryKey)])
+        .filter(([, entryValue]) => entryValue !== undefined),
+    );
+  }
+  return value;
+}
+
+function claimRequestPayload(claim: any): Record<string, unknown> {
+  return withoutInlineClaimFiles(claim) as Record<string, unknown>;
+}
+
 function toPortalUser(user: any): any {
   const profileData = user?.profileData ?? user?.profile_data ?? {};
   const nameParts = String(user?.displayName ?? user?.display_name ?? '').trim().split(/\s+/);
@@ -352,12 +380,12 @@ export const claimsApi = {
   create: async (claim: any) => {
     const current = localArray('claimnx_claims');
     saveLocal('claimnx_claims', [...current, claim]);
-    return { data: (await safe(request('/claims', { method: 'POST', body: JSON.stringify(claim) }), claim)) || claim };
+    return { data: (await safe(request('/claims', { method: 'POST', body: JSON.stringify(claimRequestPayload(claim)) }), claim)) || claim };
   },
   update: async (id: string, claim: any) => {
     const updated = localArray('claimnx_claims').map((item) => item.id === id ? claim : item);
     saveLocal('claimnx_claims', updated);
-    return { data: (await safe(request(`/claims/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(claim) }), claim)) || claim };
+    return { data: (await safe(request(`/claims/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(claimRequestPayload(claim)) }), claim)) || claim };
   },
   delete: async (id: string) => {
     saveLocal('claimnx_claims', localArray('claimnx_claims').filter((item) => item.id !== id));

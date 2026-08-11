@@ -2291,7 +2291,7 @@ const AppContent: React.FC = () => {
     try {
       // If we are finalizing a draft or using a temporary ID, delete the old draft claim
       const isDraftFinalization = claim.id?.startsWith('CL-DRAFT-') || claim.id?.startsWith('CL-') || claim.id?.startsWith('CLM-');
-      if (isDraftFinalization && claim.id) {
+      if (isDraftFinalization && claim.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(claim.id)) {
         try {
           await claimsApi.delete(claim.id);
         } catch (delErr) {
