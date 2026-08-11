@@ -373,6 +373,10 @@ export const usersApi = {
   sync: async (user: any) => ({ data: user }),
 };
 
+export const authApi = {
+  getMe: async () => request('/auth/me'),
+};
+
 const configResource = createLegacyResource('/v1/configurations');
 export const configApi = {
   ...configResource,

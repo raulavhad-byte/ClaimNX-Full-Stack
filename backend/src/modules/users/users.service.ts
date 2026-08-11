@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 
 import { AuthService } from '../auth/auth.service';
+import { DatabaseService } from '../../database/database.service';
 
 import { UsersRepository } from './users.repository';
 
@@ -16,6 +17,7 @@ export class UsersService {
   constructor(
     private readonly usersRepository: UsersRepository,
     private readonly authService: AuthService,
+    private readonly databaseService: DatabaseService,
   ) {}
 
   async findAll(filter: UserFilterDto) {
@@ -60,7 +62,11 @@ export class UsersService {
     if (dto.email !== undefined) payload.email = dto.email;
     if (dto.displayName !== undefined) payload.display_name = dto.displayName;
     if (dto.role !== undefined) payload.role = dto.role;
-    if (dto.roleId !== undefined) payload.role_id = dto.roleId;
+    if (dto.roleId !== undefined) {
+      payload.role_id = dto.roleId;
+    } else if (dto.role !== undefined) {
+      payload.role_id = await this.resolveRoleId(dto.role);
+    }
     if (dto.hospitalId !== undefined) payload.hospital_id = dto.hospitalId;
     if (dto.mobileNo !== undefined) payload.mobile_no = dto.mobileNo;
     if (dto.entityType !== undefined) payload.entity_type = dto.entityType;
@@ -78,5 +84,21 @@ export class UsersService {
     return {
       message: 'User deleted successfully',
     };
+  }
+
+  private async resolveRoleId(roleName: string): Promise<string> {
+    const { data, error } = await this.databaseService
+      .getClient()
+      .from('roles')
+      .select('id')
+      .eq('name', roleName.trim())
+      .eq('status', 'Active')
+      .maybeSingle();
+
+    if (error || !data?.id) {
+      throw new NotFoundException(`Active role "${roleName}" was not found.`);
+    }
+
+    return String(data.id);
   }
 }

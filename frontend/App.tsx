@@ -72,7 +72,7 @@ import BusinessAnalytics from './components/BusinessAnalytics';
 import ReconciliationSystem from './components/ReconciliationSystem';
 import UserProfile from './components/UserProfile';
 import { Toaster, toast } from 'sonner';
-import { claimsApi, usersApi, patientsApi, configApi } from './services/api';
+import { authApi, claimsApi, usersApi, patientsApi, configApi } from './services/api';
 import { claimnxSessionService } from './services/claimnx-session-service';
 import ReconciliationDashboard from './components/ReconciliationDashboard';
 import SalesDashboard from './components/SalesDashboard';
@@ -1238,6 +1238,21 @@ const AppContent: React.FC = () => {
           setInsurers(insurersRes.data.filter((e: any) => e.type === 'Insurer'));
           setTpas(insurersRes.data.filter((e: any) => e.type === 'TPA'));
 
+          const authenticatedUser = await authApi.getMe();
+          setHospitalProfile((current) => ({
+            ...current,
+            id: authenticatedUser?.id ?? current.id,
+            username: authenticatedUser?.email ?? current.username,
+            emailId: authenticatedUser?.email ?? current.emailId,
+            displayName: authenticatedUser?.displayName ?? current.displayName,
+            role: authenticatedUser?.role ?? current.role,
+            roleId: authenticatedUser?.roleId ?? current.roleId,
+            hospitalId: authenticatedUser?.hospitalId ?? current.hospitalId,
+            permissions: Array.isArray(authenticatedUser?.permissions)
+              ? authenticatedUser.permissions
+              : [],
+          }));
+
           const sessionUser = claimnxSessionService.getSession()?.user as Record<string, unknown> | undefined;
           const sessionRole = String(sessionUser?.role ?? hospitalProfile.role ?? '').trim().toUpperCase();
           const canLoadAdministrationData = [
@@ -1930,7 +1945,11 @@ const AppContent: React.FC = () => {
        const normalizedRoleName = String(r.name ?? '').trim().toLowerCase().replace(/\s+role$/i, '');
        return normalizedRoleName === normalizedProfileRole || (normalizedProfileRole === 'hospital user' && normalizedRoleName === 'hospital');
      });
-     let perms = roleObj ? [...roleObj.permissions] : [];
+     let perms = Array.isArray(hospitalProfile.permissions)
+       ? [...hospitalProfile.permissions]
+       : roleObj
+         ? [...roleObj.permissions]
+         : [];
 
      // Map dynamic/granular tab selections in Manage Hospital to pre-existing permission tags
      if (perms.includes('sidebar_hospital_admin:sections:tab_hospital_profile')) perms.push('administration:hospital:profile');

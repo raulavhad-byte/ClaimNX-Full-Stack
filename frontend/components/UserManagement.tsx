@@ -909,7 +909,7 @@ const UserManagement: React.FC<UserManagementProps> = ({
           : effectiveMode === "hospital_staff"
             ? formState.tpaPersonName
             : formState.hospitalName || "New Hospital",
-      role: isRahul ? "Admin" : formState.role,
+      role: isRahul ? "Super Admin" : formState.role,
       status: formState.status,
       statusReason: formState.statusReason,
       createdAt: existingUser?.createdAt || new Date().toISOString(),
