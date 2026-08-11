@@ -196,6 +196,12 @@ function toUserRequestPayload(user: any, includePassword: boolean): Record<strin
     parentHospitalId: user?.parentHospitalId ?? '',
     products: Array.isArray(user?.products) ? user.products : [],
     defaultProduct: user?.defaultProduct ?? '',
+    zones: Array.isArray(user?.zones) ? user.zones : [],
+    states: Array.isArray(user?.states) ? user.states : [],
+    districts: Array.isArray(user?.districts) ? user.districts : [],
+    assignedHospitalIds: Array.isArray(user?.assignedHospitalIds)
+      ? user.assignedHospitalIds
+      : [],
   };
   const payload: Record<string, unknown> = {
     email: user?.emailId ?? user?.email,
