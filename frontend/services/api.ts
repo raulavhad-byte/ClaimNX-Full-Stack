@@ -304,10 +304,7 @@ const configResource = createLegacyResource('/v1/configurations');
 export const configApi = {
   ...configResource,
   getInsurers: async () => ({
-    data: collectionFrom(
-      await safe(request('/insurance'), localArray('claimnx_insurers')),
-      localArray('claimnx_insurers'),
-    ).map(toPortalInsuranceEntity),
+    data: collectionFrom(await request('/insurance'), []).map(toPortalInsuranceEntity),
   }),
   getRoles: async () => ({ data: localArray('claimnx_roles') }),
   getFields: async () => ({ data: localArray('claimnx_fields') }),

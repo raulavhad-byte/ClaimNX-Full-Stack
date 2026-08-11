@@ -1177,36 +1177,11 @@ const AppContent: React.FC = () => {
     }
   });
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [insurers, setInsurers] = useState<InsuranceEntity[]>(
-    SEED_INSURERS.map((name, i) => ({ 
-      id: `seed-ins-${i}`, 
-      name, 
-      type: 'Insurer', 
-      emailId: `contact@${name.toLowerCase().replace(/[^a-z0-9]/g, '')}.com`,
-      portalLink: 'https://portal.insurance.com',
-      automationType: 'Portal',
-      onPanel: true,
-      rpaSupported: false,
-      autoEmailEnabled: true,
-      status: 'Active', 
-      createdAt: new Date().toISOString() 
-    }))
-  );
-  const [tpas, setTpas] = useState<InsuranceEntity[]>(
-    SEED_TPAS.map((name, i) => ({ 
-      id: `seed-tpa-${i}`, 
-      name, 
-      type: 'TPA', 
-      emailId: `contact@${name.toLowerCase().replace(/[^a-z0-9]/g, '')}.com`,
-      portalLink: 'https://portal.tpa.com',
-      automationType: 'Email',
-      onPanel: true,
-      rpaSupported: false,
-      autoEmailEnabled: true,
-      status: 'Active', 
-      createdAt: new Date().toISOString() 
-    }))
-  );
+  // Connector master data is database-owned. Do not seed or restore it from
+  // browser storage, otherwise failed requests can make fictitious insurers
+  // appear in the portal.
+  const [insurers, setInsurers] = useState<InsuranceEntity[]>([]);
+  const [tpas, setTpas] = useState<InsuranceEntity[]>([]);
   const [fields, setFields] = useState<FormField[]>([]);
   const [roles, setRoles] = useState<Role[]>(() => {
     try {
@@ -1284,17 +1259,21 @@ const AppContent: React.FC = () => {
     if (isAuthenticated && isAuthReady && hospitalProfile.firebase_uid) {
       const fetchData = async () => {
         try {
-          const [claimsRes, usersRes, insurersRes, rolesRes, fieldsRes] = await Promise.all([
+          // Load database-owned insurance master data first. A failure in an
+          // unrelated module (such as claim filtering) must not restore the
+          // old frontend seed list in the Connectors screen.
+          const insurersRes = await configApi.getInsurers();
+          setInsurers(insurersRes.data.filter((e: any) => e.type === 'Insurer'));
+          setTpas(insurersRes.data.filter((e: any) => e.type === 'TPA'));
+
+          const [claimsRes, usersRes, rolesRes, fieldsRes] = await Promise.all([
             claimsApi.getAll((hospitalProfile.role?.toUpperCase() === 'SUPER ADMIN' || hospitalProfile.role?.toUpperCase() === 'ADMIN') ? undefined : getScopeId(hospitalProfile)),
             usersApi.getAll(),
-            configApi.getInsurers(),
             configApi.getRoles(),
             configApi.getFields()
           ]);
           setClaims(claimsRes.data);
           setHospitalUsers(usersRes.data);
-          setInsurers(insurersRes.data.filter((e: any) => e.type === 'Insurer'));
-          setTpas(insurersRes.data.filter((e: any) => e.type === 'TPA'));
           
           const fetchedRoles = rolesRes.data;
           if (fetchedRoles && fetchedRoles.length > 0) {
