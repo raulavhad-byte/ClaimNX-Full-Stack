@@ -157,23 +157,54 @@ function isUuid(value: unknown): value is string {
 }
 
 function toPortalUser(user: any): any {
+  const profileData = user?.profileData ?? user?.profile_data ?? {};
+  const nameParts = String(user?.displayName ?? user?.display_name ?? '').trim().split(/\s+/);
   return {
+    ...profileData,
     ...user,
     displayName: user?.displayName ?? user?.display_name ?? '',
     emailId: user?.emailId ?? user?.email ?? '',
     mobileNo: user?.mobileNo ?? user?.mobile_no ?? '',
     hospitalId: user?.hospitalId ?? user?.hospital_id ?? '',
     roleId: user?.roleId ?? user?.role_id ?? undefined,
+    entityType: user?.entityType ?? user?.entity_type ?? profileData?.entityType ?? 'User',
+    firstName: user?.firstName ?? profileData?.firstName ?? nameParts[0] ?? '',
+    lastName: user?.lastName ?? profileData?.lastName ?? nameParts.slice(1).join(' '),
   };
 }
 
 function toUserRequestPayload(user: any, includePassword: boolean): Record<string, unknown> {
+  const profileData = {
+    firstName: user?.firstName ?? '',
+    lastName: user?.lastName ?? '',
+    empCode: user?.empCode ?? user?.employeeCode ?? '',
+    designation: user?.designation ?? '',
+    department: user?.department ?? '',
+    joiningDate: user?.joiningDate ?? '',
+    hospitalName: user?.hospitalName ?? '',
+    address: user?.address ?? '',
+    state: user?.state ?? '',
+    district: user?.district ?? '',
+    zone: user?.zone ?? '',
+    rohiniId: user?.rohiniId ?? '',
+    tpaPersonName: user?.tpaPersonName ?? '',
+    tpaPersonMobile: user?.tpaPersonMobile ?? '',
+    doctorName: user?.doctorName ?? '',
+    doctorMobileNo: user?.doctorMobileNo ?? '',
+    reportsToId: user?.reportsToId ?? '',
+    invoiceEmail: user?.invoiceEmail ?? '',
+    parentHospitalId: user?.parentHospitalId ?? '',
+    products: Array.isArray(user?.products) ? user.products : [],
+    defaultProduct: user?.defaultProduct ?? '',
+  };
   const payload: Record<string, unknown> = {
     email: user?.emailId ?? user?.email,
     displayName: user?.displayName ?? user?.display_name,
     role: user?.role,
     roleId: user?.roleId ?? user?.role_id,
     mobileNo: user?.mobileNo ?? user?.mobile_no,
+    entityType: user?.entityType ?? 'User',
+    profileData,
   };
 
   const hospitalId = user?.hospitalId ?? user?.hospital_id;

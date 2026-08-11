@@ -388,7 +388,17 @@ await this.auditService.log({
    */
   async createUser(createUserDto: CreateUserDto) {
     const client = this.databaseService.getClient();
-    const { email, password, displayName, role, roleId, hospitalId, mobileNo } =
+    const {
+      email,
+      password,
+      displayName,
+      role,
+      roleId,
+      hospitalId,
+      mobileNo,
+      entityType,
+      profileData,
+    } =
       createUserDto;
 
     const { data: authData, error: authError } =
@@ -415,6 +425,8 @@ await this.auditService.log({
         role_id: roleId ?? null,
         hospital_id: hospitalId ?? null,
         mobile_no: mobileNo ?? null,
+        entity_type: entityType ?? 'User',
+        profile_data: profileData ?? {},
         status: 'Active',
         is_deleted: false,
       })

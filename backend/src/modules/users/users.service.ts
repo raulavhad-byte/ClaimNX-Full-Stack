@@ -53,10 +53,20 @@ export class UsersService {
     id: string,
     dto: UpdateUserDto,
   ) {
-    return this.usersRepository.update(id, {
-      ...dto,
+    const payload: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
-    });
+    };
+
+    if (dto.email !== undefined) payload.email = dto.email;
+    if (dto.displayName !== undefined) payload.display_name = dto.displayName;
+    if (dto.role !== undefined) payload.role = dto.role;
+    if (dto.roleId !== undefined) payload.role_id = dto.roleId;
+    if (dto.hospitalId !== undefined) payload.hospital_id = dto.hospitalId;
+    if (dto.mobileNo !== undefined) payload.mobile_no = dto.mobileNo;
+    if (dto.entityType !== undefined) payload.entity_type = dto.entityType;
+    if (dto.profileData !== undefined) payload.profile_data = dto.profileData;
+
+    return this.usersRepository.update(id, payload);
   }
 
   async remove(id: string) {

@@ -1,6 +1,8 @@
 import {
   IsEmail,
+  IsIn,
   IsNotEmpty,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -34,4 +36,12 @@ export class CreateUserDto {
   @IsOptional()
   @IsString()
   mobileNo?: string;
+
+  @IsOptional()
+  @IsIn(['User', 'Hospital', 'Partner'])
+  entityType?: 'User' | 'Hospital' | 'Partner';
+
+  @IsOptional()
+  @IsObject()
+  profileData?: Record<string, unknown>;
 }
