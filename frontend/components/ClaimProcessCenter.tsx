@@ -100,6 +100,7 @@ interface ClaimProcessCenterProps {
   kypPolicies?: KYPPolicy[];
   permissions?: any;
   canAccessStageAction?: (stageKey: string, action: string) => boolean;
+  canViewMedicalClaim?: boolean;
 }
 
 const NATIONAL_INSURERS = [
@@ -557,6 +558,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
   kypPolicies = [],
   permissions,
   canAccessStageAction,
+  canViewMedicalClaim = false,
 }) => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -644,8 +646,13 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
     if (!currentStageKey || currentStageKey === "unknown") return true;
     const role = hospitalProfile?.role?.toUpperCase();
     if (role === 'SUPER ADMIN' || role === 'ADMIN' || (permissions && permissions.includes('all'))) return true;
+    // Medical Underwriting opens this shared dashboard in review context.
+    // Viewing an already scoped claim must not require update access to the
+    // claim's originating cashless stage; update actions remain protected by
+    // canAccessStageAction below.
+    if (source === 'medical' && canViewMedicalClaim) return true;
     return permissions && permissions.includes(`stage_permissions:stage_${currentStageKey}:update`);
-  }, [currentStageKey, hospitalProfile?.role, permissions]);
+  }, [currentStageKey, hospitalProfile?.role, permissions, source, canViewMedicalClaim]);
 
   if (claim && !isViewAllowed) {
     return (
