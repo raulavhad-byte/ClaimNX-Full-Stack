@@ -603,7 +603,10 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
       } else if (finalStatus === 'Rejected' || finalStatus === 'KYP Rejected') {
         kypTimelineStatus = 'KYP Rejected';
       } else if (finalStatus === 'KYP Pending Approval') {
-        kypTimelineStatus = 'KYP Pending Approval';
+        // The policy audit has submitted its KYP analysis. Keep the internal
+        // approval-routing state, but present the completed user action in
+        // the claim timeline.
+        kypTimelineStatus = 'KYP Submitted';
       } else {
         kypTimelineStatus = `KYP ${finalStatus}`;
       }

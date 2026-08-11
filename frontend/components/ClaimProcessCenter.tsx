@@ -1104,6 +1104,49 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
     setPreviewFile({ name, data, type: type || "application/pdf" });
   };
 
+  // Timeline events retain document metadata, while the file itself is kept in
+  // private storage. Resolve that canonical record on demand so documents
+  // remain previewable after a page reload.
+  const openTimelineDocumentPreview = async (document: {
+    name: string;
+    data?: string;
+    mimeType?: string;
+    type?: string;
+    documentId?: string;
+  }) => {
+    if (document.data) {
+      handlePreview(document.name, document.data, document.mimeType || document.type || "application/pdf");
+      return;
+    }
+
+    try {
+      const storedDocuments = await documentsApi.listClaimDocuments(claim.id);
+      const normalizedName = document.name.trim().toLowerCase();
+      const storedDocument = storedDocuments.find((item: any) =>
+        (document.documentId && String(item.id) === String(document.documentId)) ||
+        String(item.file_name || item.name || "").trim().toLowerCase() === normalizedName,
+      );
+
+      if (!storedDocument) {
+        toast.info("The document is no longer available in the claim registry.");
+        return;
+      }
+
+      const preview = await documentsApi.previewClaimDocument(String(storedDocument.id));
+      const previewUrl = preview?.preview_url || preview?.data?.preview_url;
+      if (!previewUrl) throw new Error("Preview URL was not returned");
+
+      handlePreview(
+        document.name || storedDocument.file_name || "Claim document",
+        previewUrl,
+        document.mimeType || storedDocument.mime_type || "application/pdf",
+      );
+    } catch (error) {
+      console.error("Unable to preview timeline document", error);
+      toast.error("Unable to open this document preview.");
+    }
+  };
+
   const handleDownload = (name: string, data: string, type: string) => {
     const link = document.createElement("a");
     link.href = data.startsWith('http://') || data.startsWith('https://')
@@ -2209,20 +2252,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
 
                     return (
                       <button
-                        onClick={() => {
-                          const doc = allEventDocs[0];
-                          if (doc.data) {
-                            handlePreview(
-                              doc.name,
-                              doc.data,
-                              doc.mimeType || "application/pdf",
-                            );
-                          } else {
-                            toast.info(
-                              "This document is a system-generated record. Preview not available in demo.",
-                            );
-                          }
-                        }}
+                      onClick={() => void openTimelineDocumentPreview(allEventDocs[0])}
                         className="flex items-center px-4 py-2 bg-[#000080] text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-blue-900 transition-all shadow-sm active:scale-95 text-left"
                       >
                         <Eye size={14} className="mr-2" /> VIEW
@@ -2270,19 +2300,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                       {allEventDocs.slice(1).map((doc, docIdx) => (
                         <button
                           key={docIdx}
-                          onClick={() => {
-                            if (doc.data) {
-                              handlePreview(
-                                doc.name,
-                                doc.data,
-                                doc.mimeType || doc.type,
-                              );
-                            } else {
-                              toast.info(
-                                "This document is a system-generated record. Preview not available in demo.",
-                              );
-                            }
-                          }}
+                          onClick={() => void openTimelineDocumentPreview(doc)}
                           className="flex items-center justify-between p-3 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-300 transition-all text-left outline-none group w-full"
                         >
                           <div className="flex items-center overflow-hidden mr-2">
@@ -3334,19 +3352,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                                        {allEventDocs.map((doc, docIdx) => (
                                          <button
                                            key={docIdx}
-                                           onClick={() => {
-                                             if (doc.data) {
-                                               handlePreview(
-                                                 doc.name,
-                                                 doc.data,
-                                                 doc.mimeType || "application/pdf",
-                                               );
-                                             } else {
-                                               toast.info(
-                                                 "Preview not available.",
-                                               );
-                                             }
-                                           }}
+                                           onClick={() => void openTimelineDocumentPreview(doc)}
                                            className="px-4 py-1.5 bg-[#000080] text-white rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-blue-900 transition-all flex items-center shadow-md shrink-0 cursor-pointer"
                                            title={`View ${doc.name}`}
                                          >
