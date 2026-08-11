@@ -1125,10 +1125,10 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
       const storedDocument = storedDocuments.find((item: any) =>
         (document.documentId && String(item.id) === String(document.documentId)) ||
         String(item.file_name || item.name || "").trim().toLowerCase() === normalizedName,
-      );
+      ) || storedDocuments[0];
 
       if (!storedDocument) {
-        toast.info("The document is no longer available in the claim registry.");
+        toast.info("No uploaded documents are available for this claim.");
         return;
       }
 
@@ -1146,6 +1146,14 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
       toast.error("Unable to open this document preview.");
     }
   };
+
+  // Older records persisted the workflow-routing label in the timeline. The
+  // user-facing event should describe the completed Policy Audit action.
+  const getTimelineStatusLabel = (event: { status: string; comment?: string }) =>
+    event.status === ClaimStatus.KYP_PENDING_APPROVAL &&
+    String(event.comment || "").toLowerCase().includes("kyp analysis submitted")
+      ? "KYP Submitted"
+      : event.status;
 
   const handleDownload = (name: string, data: string, type: string) => {
     const link = document.createElement("a");
@@ -2200,7 +2208,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                 <div className="flex justify-between items-start mb-4">
                   <div>
                     <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">
-                      {event.status}
+                      {getTimelineStatusLabel(event)}
                     </h3>
                     <div className="flex items-center gap-3 mt-1">
                       <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest bg-indigo-50 px-2.5 py-1 rounded-xl border border-indigo-100 flex items-center shadow-sm">
@@ -3243,7 +3251,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
 
                             <div className="space-y-1.5">
                               <h4 className="text-sm font-black text-slate-800 leading-tight tracking-tight uppercase">
-                                {event.status}
+                                {getTimelineStatusLabel(event)}
                               </h4>
                               <div className="space-y-1.5">
                                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
