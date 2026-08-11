@@ -55,6 +55,34 @@ export class DocumentsController {
     });
   }
 
+  /** Store a hospital-owned rate list outside the users JSON profile. */
+  @Post('hospital-asset/upload')
+  @UseInterceptors(FileInterceptor('file', {
+    limits: { fileSize: 25 * 1024 * 1024 },
+  }))
+  uploadHospitalAsset(
+    @UploadedFile() file: any,
+    @Body('hospital_user_id') hospitalUserId: string,
+    @Body('payer_id') payerId: string | undefined,
+    @CurrentUser('id') uploadedBy: string,
+  ) {
+    if (!file) throw new BadRequestException('A rate-list file is required.');
+    return this.documentsService.uploadHospitalRateList({
+      file,
+      hospitalUserId,
+      payerId,
+      uploadedBy,
+    });
+  }
+
+  @Get('hospital-asset/preview')
+  previewHospitalAsset(
+    @Query('path') path: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.documentsService.createHospitalAssetPreviewUrl(path, userId);
+  }
+
   @Post()
   create(
     @Body() createDocumentDto: CreateDocumentDto,

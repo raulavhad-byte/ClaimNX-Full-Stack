@@ -20,15 +20,16 @@ export class DocumentsService {
   ) {}
 
   private static readonly claimDocumentsBucket = 'claim-documents';
+  private static readonly hospitalAssetsBucket = 'hospital-assets';
   private static readonly maxFileSizeBytes = 25 * 1024 * 1024;
 
-  private async ensureClaimDocumentsBucket() {
+  private async ensurePrivateBucket(bucket: string) {
     const storage = this.databaseService.getClient().storage;
-    const { error } = await storage.getBucket(DocumentsService.claimDocumentsBucket);
+    const { error } = await storage.getBucket(bucket);
     if (!error) return;
 
     const { error: createError } = await storage.createBucket(
-      DocumentsService.claimDocumentsBucket,
+      bucket,
       {
         public: false,
         fileSizeLimit: DocumentsService.maxFileSizeBytes,
@@ -41,6 +42,61 @@ export class DocumentsService {
         `Unable to initialise private claim document storage: ${createError.message}`,
       );
     }
+  }
+
+  private async ensureClaimDocumentsBucket() {
+    return this.ensurePrivateBucket(DocumentsService.claimDocumentsBucket);
+  }
+
+  private async ensureHospitalAssetsBucket() {
+    return this.ensurePrivateBucket(DocumentsService.hospitalAssetsBucket);
+  }
+
+  async uploadHospitalRateList(input: {
+    file: { buffer: Buffer; originalname: string; mimetype?: string; size: number };
+    hospitalUserId: string;
+    payerId?: string;
+    uploadedBy: string;
+  }) {
+    if (!input.hospitalUserId || input.hospitalUserId !== input.uploadedBy) {
+      throw new BadRequestException('Rate lists can only be uploaded for the signed-in hospital.');
+    }
+    if (!input.file.size || input.file.size > DocumentsService.maxFileSizeBytes) {
+      throw new BadRequestException('Rate lists must be between 1 byte and 25 MB.');
+    }
+
+    await this.ensureHospitalAssetsBucket();
+    const safeFileName = input.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^_+/, '') || 'rate-list';
+    const safePayer = String(input.payerId ?? 'payer').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'payer';
+    const objectPath = `hospitals/${input.hospitalUserId}/rate-lists/${safePayer}/${randomUUID()}-${safeFileName}`;
+    const { error } = await this.databaseService.getClient().storage
+      .from(DocumentsService.hospitalAssetsBucket)
+      .upload(objectPath, input.file.buffer, {
+        contentType: input.file.mimetype || 'application/octet-stream',
+        upsert: false,
+      });
+    if (error) throw new BadRequestException(`Unable to store rate list: ${error.message}`);
+
+    return {
+      storage_path: objectPath,
+      file_name: input.file.originalname,
+      mime_type: input.file.mimetype || 'application/octet-stream',
+      file_size: input.file.size,
+    };
+  }
+
+  async createHospitalAssetPreviewUrl(storagePath: string, userId: string) {
+    const expectedPrefix = `hospitals/${userId}/rate-lists/`;
+    if (!storagePath?.startsWith(expectedPrefix) || storagePath.includes('..')) {
+      throw new BadRequestException('Invalid hospital asset path.');
+    }
+    const { data, error } = await this.databaseService.getClient().storage
+      .from(DocumentsService.hospitalAssetsBucket)
+      .createSignedUrl(storagePath, 10 * 60);
+    if (error || !data?.signedUrl) {
+      throw new BadRequestException(error?.message ?? 'Unable to create a secure rate-list preview.');
+    }
+    return { preview_url: data.signedUrl, preview_expires_in: 10 * 60 };
   }
 
   async uploadClaimFile(input: {

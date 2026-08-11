@@ -64,6 +64,7 @@ import {
   safeFormatYmd,
 } from "../utils";
 import { auditService } from "../services/auditService";
+import { documentsApi } from "../services/api";
 import StarHealthTemplate from "./StarHealthTemplate";
 import TataAigTemplate from "./TataAigTemplate";
 import HdfcErgoTemplate from "./HdfcErgoTemplate";
@@ -605,7 +606,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
       .replace(/[^a-z0-9]/g, '');
     const findCredential = (provider: unknown) => {
       const normalizedProvider = normalizePayer(provider);
-      return credentials.find((credential: any) => credential.rateListData && (
+      return credentials.find((credential: any) => (credential.rateListData || credential.rateListStoragePath) && (
         credential.entityId === provider ||
         normalizePayer(credential.entityId) === normalizedProvider
       ));
@@ -1100,11 +1101,36 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
 
   const handleDownload = (name: string, data: string, type: string) => {
     const link = document.createElement("a");
-    link.href = `data:${type};base64,${data}`;
+    link.href = data.startsWith('http://') || data.startsWith('https://')
+      ? data
+      : `data:${type};base64,${data}`;
     link.download = name;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const openRateList = async () => {
+    if (!rateList) {
+      toast.error(
+        "Rate list not uploaded for " +
+        (claim?.formData?.tpa_provider && claim.formData.tpa_provider !== "Direct Carrier Logic"
+          ? claim.formData.tpa_provider
+          : claim?.insuranceProvider),
+      );
+      return;
+    }
+    try {
+      if (rateList.rateListStoragePath) {
+        const preview = await documentsApi.previewHospitalRateList(rateList.rateListStoragePath);
+        handlePreview(rateList.rateListName || 'Rate List', preview.preview_url, rateList.rateListType || 'application/pdf');
+        return;
+      }
+      handlePreview(rateList.rateListName || 'Rate List', rateList.rateListData, rateList.rateListType || 'application/pdf');
+    } catch (error: any) {
+      console.error('Unable to preview rate list', error);
+      toast.error(error?.message || 'Unable to preview rate list.');
+    }
   };
 
   const getFieldsForStatus = (status: ClaimStatus | "REOPEN CASE") => {
@@ -3126,24 +3152,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                     View Documents
                   </button>
                   <button
-                    onClick={() => {
-                      if (rateList) {
-                        handlePreview(
-                          rateList.rateListName || "Rate List",
-                          rateList.rateListData!,
-                          "application/pdf",
-                        );
-                      } else {
-                        toast.error(
-                          "Rate list not uploaded for " +
-                            (claim.formData?.tpa_provider &&
-                            claim.formData?.tpa_provider !==
-                              "Direct Carrier Logic"
-                              ? claim.formData?.tpa_provider
-                              : claim.insuranceProvider),
-                        );
-                      }
-                    }}
+                    onClick={openRateList}
                     className="px-4 py-2 bg-[#800000] text-white rounded-xl text-sm font-black uppercase tracking-widest hover:bg-red-900 transition-all shadow-sm active:scale-95"
                   >
                     Rate List / SOC

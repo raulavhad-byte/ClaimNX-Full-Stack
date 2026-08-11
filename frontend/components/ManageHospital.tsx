@@ -13,7 +13,7 @@ import {
 
 import { formatDate, isValidYearFormat, checkDateReasonability } from '../utils';
 import { toast } from 'sonner';
-import { usersApi, ordersApi } from '../services/api';
+import { documentsApi, usersApi, ordersApi } from '../services/api';
 
 interface ManageHospitalProps {
   user: HospitalUser;
@@ -121,6 +121,10 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
 
   useEffect(() => {
     if (previewRateList?.fileData) {
+      if (previewRateList.fileData.startsWith('http://') || previewRateList.fileData.startsWith('https://')) {
+        setBlobUrl(previewRateList.fileData);
+        return;
+      }
       try {
         const byteCharacters = atob(previewRateList.fileData);
         const byteNumbers = new Array(byteCharacters.length);
@@ -571,16 +575,66 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
   const handleRateListUpload = (entityId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-          const result = event.target?.result as string;
-          const base64Data = result.split(',')[1];
-          const currentCreds = (formData.portalCredentials || []).map(c => 
-            c.entityId === entityId ? { ...c, rateListName: file.name, rateListData: base64Data, rateListType: file.type } : c
-          );
-          setFormData(prev => ({ ...prev, portalCredentials: currentCreds }));
-      };
-      reader.readAsDataURL(file);
+      if (!formData.id) {
+        toast.error('Hospital profile is not available for file upload.');
+        return;
+      }
+      setSavingEntityId(`upload-${entityId}`);
+      documentsApi.uploadHospitalRateList({
+        hospitalUserId: formData.id,
+        payerId: entityId,
+        file,
+      }).then((asset) => {
+        const currentCreds = (formData.portalCredentials || []).map((credential: any) =>
+          credential.entityId === entityId ? {
+            ...credential,
+            rateListName: asset.file_name || file.name,
+            rateListStoragePath: asset.storage_path,
+            rateListType: asset.mime_type || file.type,
+            // Purge the old inline value so a subsequent profile save stays
+            // small regardless of the uploaded file size.
+            rateListData: '',
+          } : credential,
+        );
+        setFormData((previous) => ({ ...previous, portalCredentials: currentCreds }));
+        toast.success('Rate list stored securely. Click Save Configuration to link it to this payer.');
+      }).catch((error) => {
+        console.error('Rate-list upload failed', error);
+        toast.error(error?.message || 'Unable to upload rate list.');
+      }).finally(() => setSavingEntityId(null));
+    }
+  };
+
+  const openRateListPreview = async (entityName: string, credential: any) => {
+    try {
+      if (credential?.rateListStoragePath) {
+        const preview = await documentsApi.previewHospitalRateList(credential.rateListStoragePath);
+        setPreviewRateList({
+          entityName,
+          fileName: credential.rateListName || 'Rate List',
+          fileData: preview.preview_url,
+          fileType: credential.rateListType || 'application/pdf',
+        });
+        return;
+      }
+      setPreviewRateList({ entityName, fileName: credential?.rateListName || 'Rate List', fileData: credential?.rateListData, fileType: credential?.rateListType });
+    } catch (error: any) {
+      console.error('Rate-list preview failed', error);
+      toast.error(error?.message || 'Unable to preview rate list.');
+    }
+  };
+
+  const downloadRateList = async (credential: any) => {
+    try {
+      if (credential?.rateListStoragePath) {
+        const preview = await documentsApi.previewHospitalRateList(credential.rateListStoragePath);
+        handleDownload(credential.rateListName || 'Rate List', preview.preview_url, credential.rateListType);
+        return;
+      }
+      handleDownload(credential?.rateListName || 'Rate List', credential?.rateListData, credential?.rateListType);
+    } catch (error: any) {
+      console.error('Rate-list download failed', error);
+      toast.error(error?.message || 'Unable to download rate list.');
     }
   };
 
@@ -691,7 +745,9 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
 
   const handleDownload = (name: string, data: string, type?: string) => {
     const link = document.createElement('a');
-    link.href = `data:${type || 'application/pdf'};base64,${data}`;
+    link.href = data?.startsWith('http://') || data?.startsWith('https://')
+      ? data
+      : `data:${type || 'application/pdf'};base64,${data}`;
     link.download = name;
     document.body.appendChild(link);
     link.click();
@@ -870,7 +926,7 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
                               <td className="px-6 py-4"><div className="flex flex-col space-y-1 text-[10px] text-slate-500"><div><span className="font-black text-slate-300 w-10 inline-block">START:</span> {formatDateDDMMYYYY(credential?.startDate)}</div><div><span className="font-black text-slate-300 w-10 inline-block">END:</span> {formatDateDDMMYYYY(credential?.endDate)}</div></div></td>
                               <td className="px-6 py-4 font-mono text-slate-600">{credential?.username || '--'}</td>
                               <td className="px-6 py-4"><div className="flex items-center space-x-2"><span className="font-mono text-slate-600 tracking-widest min-w-[80px]">{showPass ? (credential?.password || '--') : '••••••••'}</span><button onClick={() => togglePasswordVisibility(entity.name)} className="text-slate-300 hover:text-slate-500">{showPass ? <EyeOff size={14} /> : <Eye size={14} />}</button></div></td>
-                              <td className="px-6 py-4">{credential?.rateListName ? <div className="flex items-center space-x-2"><button className="flex items-center px-3 py-1.5 bg-emerald-50 text-emerald-600 rounded-lg text-[10px] font-black uppercase border border-emerald-100" onClick={() => setPreviewRateList({ entityName: entity.name, fileName: credential.rateListName, fileData: credential.rateListData, fileType: credential.rateListType })}><Search size={12} className="mr-1.5" /> View</button><button className="flex items-center px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-[10px] font-black uppercase border border-blue-100" onClick={() => handleDownload(credential.rateListName, credential.rateListData, credential.rateListType)}><Download size={12} className="mr-1.5" /> Download</button></div> : <span className="text-[10px] text-slate-400 font-bold italic">Not Uploaded</span>}</td>
+                              <td className="px-6 py-4">{credential?.rateListName ? <div className="flex items-center space-x-2"><button className="flex items-center px-3 py-1.5 bg-emerald-50 text-emerald-600 rounded-lg text-[10px] font-black uppercase border border-emerald-100" onClick={() => openRateListPreview(entity.name, credential)}><Search size={12} className="mr-1.5" /> View</button><button className="flex items-center px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-[10px] font-black uppercase border border-blue-100" onClick={() => downloadRateList(credential)}><Download size={12} className="mr-1.5" /> Download</button></div> : <span className="text-[10px] text-slate-400 font-bold italic">Not Uploaded</span>}</td>
                               <td className="px-6 py-4 text-right"><div className="flex justify-end space-x-2"><button onClick={() => { setPayerFilter(entity.type === 'TPA' ? 'TPAs' : 'Insurers'); setExpandedEntityId(entity.name); }} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Edit2 size={16} /></button><button onClick={() => setPayerToRemove(entity)} className="p-2 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-lg"><Trash2 size={16} /></button></div></td>
                             </tr>
                           );
@@ -921,7 +977,7 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
                                         <div className="flex items-center justify-between mb-2">
                                            <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Rate List</h5>
                                            {credential?.rateListName && (
-                                              <div className="flex items-center gap-3"><button onClick={() => setPreviewRateList({ entityName: entity.name, fileName: credential.rateListName, fileData: credential.rateListData, fileType: credential.rateListType })} className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:underline flex items-center gap-1"><Search size={12} /> View</button><button onClick={() => handleDownload(credential.rateListName, credential.rateListData, credential.rateListType)} className="text-[10px] font-black text-emerald-600 uppercase tracking-widest hover:underline flex items-center gap-1"><Download size={12} /> Download</button></div>
+                                              <div className="flex items-center gap-3"><button onClick={() => openRateListPreview(entity.name, credential)} className="text-[10px] font-black text-blue-600 uppercase tracking-widest hover:underline flex items-center gap-1"><Search size={12} /> View</button><button onClick={() => downloadRateList(credential)} className="text-[10px] font-black text-emerald-600 uppercase tracking-widest hover:underline flex items-center gap-1"><Download size={12} /> Download</button></div>
                                            )}
                                         </div>
                                         <div className="relative group"><input type="file" id={`rate-list-${entity.id}`} className="hidden" onChange={(e) => handleRateListUpload(entity.name, e)} /><label htmlFor={`rate-list-${entity.id}`} className="flex flex-col items-center justify-center w-full h-[90px] border-2 border-dashed border-slate-300 rounded-2xl cursor-pointer bg-slate-50 hover:bg-white">{credential?.rateListName ? <div className="flex items-center space-x-2 text-emerald-600"><CheckCircle2 size={16} /><span className="text-[10px] font-bold truncate max-w-[120px]">{credential.rateListName}</span></div> : <><Upload size={18} className="text-slate-400 mb-1" /><span className="text-[9px] font-bold text-slate-400 uppercase">Upload PDF/Excel</span></>}</label></div>

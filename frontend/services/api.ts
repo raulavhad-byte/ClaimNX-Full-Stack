@@ -291,10 +291,9 @@ function toUserRequestPayload(user: any, includePassword: boolean): Record<strin
         startDate: credential?.startDate ?? '',
         endDate: credential?.endDate ?? '',
         rateListName: credential?.rateListName ?? '',
-        // Rate lists are non-secret hospital assets.  Keep their content and
-        // MIME type in the persisted profile so the file can be viewed again
-        // after a refresh or a new login. Portal passwords remain excluded.
-        rateListData: credential?.rateListData ?? '',
+        // Binary rate-list data belongs in private object storage; profile
+        // JSON stores only the file metadata and its storage reference.
+        rateListStoragePath: credential?.rateListStoragePath ?? '',
         rateListType: credential?.rateListType ?? '',
       }))
       : [],
@@ -629,4 +628,21 @@ export const documentsApi = {
   },
   previewClaimDocument: async (documentId: string) =>
     request(`/documents/${encodeURIComponent(documentId)}/preview`),
+  uploadHospitalRateList: async ({
+    hospitalUserId,
+    payerId,
+    file,
+  }: {
+    hospitalUserId: string;
+    payerId: string;
+    file: File;
+  }) => {
+    const formData = new FormData();
+    formData.append('hospital_user_id', hospitalUserId);
+    formData.append('payer_id', payerId);
+    formData.append('file', file, file.name);
+    return request('/documents/hospital-asset/upload', { method: 'POST', body: formData });
+  },
+  previewHospitalRateList: async (storagePath: string) =>
+    request(`/documents/hospital-asset/preview?path=${encodeURIComponent(storagePath)}`),
 };

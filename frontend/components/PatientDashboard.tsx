@@ -1105,7 +1105,7 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
       .replace(/[^a-z0-9]/g, '');
     const findCredential = (provider: unknown) => {
       const normalizedProvider = normalizePayer(provider);
-      return credentials.find((credential: any) => credential.rateListData && (
+      return credentials.find((credential: any) => (credential.rateListData || credential.rateListStoragePath) && (
         credential.entityId === provider ||
         normalizePayer(credential.entityId) === normalizedProvider
       ));
