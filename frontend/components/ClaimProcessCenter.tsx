@@ -628,7 +628,9 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
 
     // Default: Show Insurer's rate list
     const insurerCreds = findCredential(insurerName);
-    return insurerCreds?.rateListData ? insurerCreds : null;
+    return insurerCreds?.rateListData || insurerCreds?.rateListStoragePath
+      ? insurerCreds
+      : null;
   }, [claim, hospitalProfile]);
 
   const currentStage = useMemo(() => {
