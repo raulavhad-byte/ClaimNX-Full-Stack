@@ -5,6 +5,7 @@
     "dev": "npm --prefix frontend run dev",
     "dev:frontend": "npm --prefix frontend run dev",
     "dev:backend": "npm --prefix backend run start:dev",
+    "preview:frontend": "npm --prefix frontend run preview -- --host 0.0.0.0",
     "build": "npm --prefix frontend run build && npm --prefix backend run build",
     "build:frontend": "npm --prefix frontend run build",
     "build:backend": "npm --prefix backend run build"
