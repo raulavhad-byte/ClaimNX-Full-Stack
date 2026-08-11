@@ -94,6 +94,7 @@ import { jsPDF } from "jspdf";
 import html2canvas from "html2canvas";
 import { toast } from "sonner";
 import { isValidYearFormat, checkDateReasonability, formatDate, safeHtml2Canvas } from "../utils";
+import { documentsApi } from "../services/api";
 
 interface ClaimFormWizardProps {
   fields: FormField[];
@@ -114,6 +115,15 @@ interface AttachedDocument {
   name: string;
   file?: File;
   fileData?: string;
+}
+
+function base64ToFile(data: string, name: string, mimeType: string): File {
+  const bytes = atob(data);
+  const values = new Uint8Array(bytes.length);
+  for (let index = 0; index < bytes.length; index += 1) {
+    values[index] = bytes.charCodeAt(index);
+  }
+  return new File([values], name, { type: mimeType || 'application/octet-stream' });
 }
 
 // Helper to convert File to Base64
@@ -1777,7 +1787,9 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
           userRole: currentUser.role || 'Hospital User',
           comment: "New Cashless Admission submitted. Case flow initiated simultaneously to Medical Underwriting and Policy Audit Team.",
           stageData: {
-            documents: processedDocs,
+            // Binary data is uploaded only after the claim has a database UUID.
+            // Keeping it out of claim state also prevents oversized JSON requests.
+            documents: processedDocs.map(({ data, ...document }) => document),
           },
         },
       ],
@@ -1840,7 +1852,27 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
     }
 
     const savedClaim = await onSave(newClaim, { preventNavigation: true } as any);
-    setGeneratedClaim(savedClaim || newClaim);
+    const persistedClaim = savedClaim || newClaim;
+    const persistedClaimId = String((persistedClaim as any)?.id || '');
+
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(persistedClaimId)) {
+      const uploads = await Promise.allSettled(
+        processedDocs.map((document) => documentsApi.uploadClaimFile({
+          claimId: persistedClaimId,
+          file: base64ToFile(document.data, document.name, document.mimeType),
+          category: document.type,
+        })),
+      );
+      const failedUploads = uploads.filter((upload) => upload.status === 'rejected');
+      if (failedUploads.length) {
+        console.error('Some claim documents could not be stored:', failedUploads);
+        toast.error(`${failedUploads.length} claim document(s) could not be stored.`);
+      }
+    } else {
+      console.warn('Claim was not persisted to the backend; skipping document upload.');
+    }
+
+    setGeneratedClaim(persistedClaim);
     setSubmissionComplete(true);
     setIsSaving(false);
   };

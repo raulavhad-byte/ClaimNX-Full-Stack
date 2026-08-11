@@ -66,7 +66,11 @@ async function request(path: string, init: RequestInit = {}): Promise<any> {
     throw new Error('No backend access token; using local development data.');
   }
 
-  if (init.body !== undefined && !headers.has('Content-Type')) {
+  if (
+    init.body !== undefined &&
+    !(init.body instanceof FormData) &&
+    !headers.has('Content-Type')
+  ) {
     headers.set('Content-Type', 'application/json');
   }
   if (accessToken) {
@@ -491,3 +495,21 @@ export const configApi = {
 
 export const patientsApi = createLegacyResource('/patients');
 export const ordersApi = createLegacyResource('/orders');
+
+export const documentsApi = {
+  uploadClaimFile: async ({
+    claimId,
+    file,
+    category,
+  }: {
+    claimId: string;
+    file: File;
+    category?: string;
+  }) => {
+    const formData = new FormData();
+    formData.append('claim_id', claimId);
+    formData.append('file', file, file.name);
+    if (category) formData.append('category', category);
+    return request('/documents/upload', { method: 'POST', body: formData });
+  },
+};
