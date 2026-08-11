@@ -52,12 +52,14 @@ DO $$
 DECLARE
   unsecured_tables TEXT;
 BEGIN
-  SELECT string_agg(quote_ident(tablename), ', ' ORDER BY tablename)
+  SELECT string_agg(quote_ident(relation.relname), ', ' ORDER BY relation.relname)
   INTO unsecured_tables
-  FROM pg_tables
-  WHERE schemaname = 'public'
-    AND tablename <> 'spatial_ref_sys'
-    AND (NOT rowsecurity OR NOT forcerowsecurity);
+  FROM pg_class relation
+  JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+  WHERE namespace.nspname = 'public'
+    AND relation.relkind IN ('r', 'p')
+    AND relation.relname <> 'spatial_ref_sys'
+    AND (NOT relation.relrowsecurity OR NOT relation.relforcerowsecurity);
 
   IF unsecured_tables IS NOT NULL THEN
     RAISE EXCEPTION
