@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 import { ClaimsService } from './claims.service';
 
@@ -28,8 +29,9 @@ export class ClaimsController {
   @Post()
   create(
     @Body() createClaimDto: CreateClaimDto,
+    @CurrentUser('id') actorUserId: string,
   ) {
-    return this.claimsService.create(createClaimDto);
+    return this.claimsService.create(createClaimDto, actorUserId);
   }
 
   @Get()
