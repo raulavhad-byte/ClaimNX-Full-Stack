@@ -528,6 +528,20 @@ const UserManagement: React.FC<UserManagementProps> = ({
     return result;
   }, [parentHospital, roles, mode]);
 
+  // A legacy default such as "Admin" may not exist in the database-backed
+  // role directory. Native select controls display their first option in that
+  // situation while retaining the invalid value in React state, which causes
+  // the wrong role to be submitted. Always keep the form state valid.
+  useEffect(() => {
+    if (!showAddForm || availableRoles.length === 0) return;
+    if (!availableRoles.includes(formState.role)) {
+      setFormState((current) => ({
+        ...current,
+        role: availableRoles[0],
+      }));
+    }
+  }, [showAddForm, availableRoles, formState.role]);
+
   const handleOpenAdd = () => {
     setEditingUserId(null);
     setFormState(initialUserState);
