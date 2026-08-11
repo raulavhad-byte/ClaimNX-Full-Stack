@@ -2167,7 +2167,7 @@ CRM Team
                   onClick={() => {
                     const cId = showPatientDashboard.id;
                     setShowPatientDashboard(null);
-                    navigate(`/process-claim/${cId}?source=crm`);
+                    navigate(`/patient-dashboard/${encodeURIComponent(showPatientDashboard.patientName)}?claimId=${encodeURIComponent(cId)}&source=crm`);
                   }}
                   className="px-4 py-2 bg-[#000080] text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-blue-900 transition-all flex items-center gap-2 cursor-pointer shadow-md"
                 >

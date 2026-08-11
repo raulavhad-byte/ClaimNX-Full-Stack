@@ -134,7 +134,7 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
   const [isDocMaximized, setIsDocMaximized] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [policyFile, setPolicyFile] = useState<string | null>(null);
-  const [persistedClaimDocs, setPersistedClaimDocs] = useState<{ url: string; name: string }[]>([]);
+  const [persistedClaimDocs, setPersistedClaimDocs] = useState<{ url: string; name: string; type?: string }[]>([]);
 
   // Auto-show preview in view mode for completed cases
   useEffect(() => {
@@ -161,6 +161,7 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
           return {
             url: preview?.preview_url ?? preview?.data?.preview_url ?? '',
             name: record.file_name ?? record.name ?? 'Claim document',
+            type: preview?.mime_type ?? preview?.data?.mime_type ?? record.mime_type ?? 'application/pdf',
           };
         }));
         if (active) setPersistedClaimDocs(previews.filter((document) => document.url));
@@ -176,7 +177,7 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
   // Handle multiple documents from the secure store, claim history, and
   // legacy local state during migration.
   const claimDocs = useMemo(() => {
-    const allDocs: {url: string, name: string}[] = [...persistedClaimDocs];
+    const allDocs: {url: string, name: string, type?: string}[] = [...persistedClaimDocs];
     
     // Add processed/uploaded policy file if it exists in state
     if (policyFile) {
@@ -203,7 +204,7 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
             if (url) {
               // Avoid duplicates if same URL is found
               if (!allDocs.some(d => d.url === url)) {
-                allDocs.push({ url, name });
+              allDocs.push({ url, name, type: doc.mimeType });
               }
             }
           });
@@ -218,7 +219,8 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
           if (url && !allDocs.some(d => d.url === url)) {
             allDocs.push({
               url,
-              name: doc.name || doc.type || 'Upload'
+              name: doc.name || doc.type || 'Upload',
+              type: doc.mimeType,
             });
           }
        });
@@ -229,8 +231,9 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
         let url = (doc.data && typeof doc.data === 'string') ? (doc.data.startsWith('data:') ? doc.data : `data:application/pdf;base64,${doc.data}`) : '';
         if (url && !allDocs.some(d => d.url === url)) {
           allDocs.push({
-            url,
-            name: doc.name || doc.type || 'Attached Doc'
+              url,
+              name: doc.name || doc.type || 'Attached Doc',
+              type: doc.mimeType,
           });
         }
       });
@@ -239,7 +242,7 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
     return allDocs;
   }, [claim, policyFile, persistedClaimDocs]);
 
-  const [viewingDocument, setViewingDocument] = useState<{ url: string, name: string } | null>(null);
+  const [viewingDocument, setViewingDocument] = useState<{ url: string, name: string, type?: string } | null>(null);
 
   // Initialize with first document if available, prioritize "Policy Documents"
   useEffect(() => {
@@ -271,7 +274,7 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
       reader.onload = (event) => {
         const url = event.target?.result as string;
         setPolicyFile(url);
-        setViewingDocument({ url, name: file.name });
+                          setViewingDocument({ url, name: file.name, type: file.type });
         toast.success("Policy document uploaded successfully");
         // Audit log for document upload
         auditService.log({
@@ -704,8 +707,13 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
               <button 
                 onClick={() => {
                   onClose();
-                  const targetClaimId = claim?.id || formData?.claimId || formData?.id || 'CPC-101';
-                  navigate(`/process-claim/${targetClaimId}?source=kyp_dashboard`);
+                  const targetClaimId = claim?.id || formData?.claimId || formData?.id;
+                  const targetPatientName = claim?.patientName || formData?.patientName;
+                  if (!targetClaimId || !targetPatientName) {
+                    toast.error('This Policy Audit case is not linked to a patient claim.');
+                    return;
+                  }
+                  navigate(`/patient-dashboard/${encodeURIComponent(targetPatientName)}?claimId=${encodeURIComponent(targetClaimId)}&source=kyp_dashboard`);
                 }}
                 className="flex items-center px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-100 transition-all shadow-sm cursor-pointer"
               >
@@ -845,9 +853,9 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
                          </div>
                       </div>
                       <div className="flex-1 bg-slate-50 flex items-center justify-center overflow-hidden">
-                        {viewingDocument.url?.startsWith('data:image/') ? (
+                        {viewingDocument.type?.startsWith('image/') || viewingDocument.url?.startsWith('data:image/') ? (
                           <img src={viewingDocument.url} alt="Policy Document" className="max-w-full max-h-full object-contain" />
-                        ) : viewingDocument.url?.startsWith('data:application/pdf') ? (
+                        ) : viewingDocument.type?.includes('pdf') || viewingDocument.url?.startsWith('data:application/pdf') || viewingDocument.url?.startsWith('http') ? (
                           <iframe src={viewingDocument.url} className="w-full h-full border-none" title="Policy Document PDF" />
                         ) : (
                           <div className="flex flex-col items-center justify-center space-y-4 p-10">

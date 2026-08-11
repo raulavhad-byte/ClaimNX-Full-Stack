@@ -642,7 +642,7 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
           </button>
           <button
             onClick={() =>
-              navigate(`/process-claim/${claim.id}?source=crm`, {
+              navigate(`/patient-dashboard/${encodeURIComponent(claim.patientName)}?claimId=${encodeURIComponent(claim.id)}&source=crm`, {
                 state: { from: "/crm-handle/" + claim.id },
               })
             }

@@ -1918,7 +1918,7 @@ CRM Operations`,
                     </button>
                     <button
                       onClick={() => {
-                        navigate(`/process-claim/${selectedFailedClaim.id}?source=recon`);
+                        navigate(`/patient-dashboard/${encodeURIComponent(selectedFailedClaim.patientName)}?claimId=${encodeURIComponent(selectedFailedClaim.id)}&source=recon`);
                       }}
                       className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-2xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shadow-sm select-none"
                     >

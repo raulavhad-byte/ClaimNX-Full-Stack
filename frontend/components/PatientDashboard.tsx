@@ -573,6 +573,20 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
   };
 
   const patientClaims = useMemo(() => {
+    const activeClaimId = searchParams.get('claimId');
+    // Queue users always arrive with a concrete claim ID. Use it as the
+    // authoritative anchor so duplicate names and URL formatting can never
+    // open an empty or unrelated patient dashboard.
+    if (activeClaimId) {
+      const requestedClaim = claims.find((claim) => claim.id === activeClaimId);
+      if (requestedClaim) {
+        const patientId = requestedClaim.patientId;
+        const relatedClaims = patientId
+          ? claims.filter((claim) => claim.status !== ClaimStatus.DRAFT && claim.patientId === patientId)
+          : [requestedClaim];
+        return relatedClaims.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      }
+    }
     // First find the anchor claim for this patient name to get identification details
     // Use a case-insensitive search and handle potential URL encoding
     const decodedName = patientName ? decodeURIComponent(patientName).trim() : '';
@@ -703,7 +717,7 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
       }
       return claim;
     });
-  }, [claims, patientName, productFilter]);
+  }, [claims, patientName, productFilter, searchParams]);
 
   const latestClaim = patientClaims[0];
 
