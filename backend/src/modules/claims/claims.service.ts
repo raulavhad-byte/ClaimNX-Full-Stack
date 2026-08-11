@@ -35,27 +35,58 @@ export class ClaimsService {
       this.requireReferenceValue('CLAIM_LIFECYCLE_STATUS', 'DRAFT'),
     ]);
 
-    const { data, error } = await this.supabase
-      .from('claims')
-      .insert({
-        ...createClaimDto,
-        organization_id: hospital.organization_id,
-        claim_number: createClaimDto.case_ref_id,
-        claim_product_reference_value_id: productReferenceId,
-        claim_type_reference_value_id: claimTypeReferenceId,
-        lifecycle_status_reference_value_id: lifecycleReferenceId,
-        created_by: actorUserId,
-        updated_by: actorUserId,
-        last_updated_by: actorUserId,
-        is_deleted: false,
-        version: 1,
-      })
-      .select()
-      .single();
+    // Never trust a browser-generated case reference. Multiple hospitals and
+    // concurrent browser sessions can otherwise produce the same value (for
+    // example, "CPC-101"). The legacy case_ref_id is globally unique, while
+    // claim_number is a readable organization-scoped number when the database
+    // allocator is available.
+    let lastError: any;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const caseReferenceId = `CASE-${randomUUID()}`;
+      const claimNumber = await this.allocateClaimNumber(hospital.organization_id);
+      const { data, error } = await this.supabase
+        .from('claims')
+        .insert({
+          ...createClaimDto,
+          case_ref_id: caseReferenceId,
+          organization_id: hospital.organization_id,
+          claim_number: claimNumber,
+          claim_product_reference_value_id: productReferenceId,
+          claim_type_reference_value_id: claimTypeReferenceId,
+          lifecycle_status_reference_value_id: lifecycleReferenceId,
+          created_by: actorUserId,
+          updated_by: actorUserId,
+          last_updated_by: actorUserId,
+          is_deleted: false,
+          version: 1,
+        })
+        .select()
+        .single();
 
-    if (error) throw error;
+      if (!error) return data;
+      lastError = error;
+      // Retry only for the database's uniqueness check. All validation and
+      // availability errors must remain visible to the caller immediately.
+      if (error.code !== '23505') throw error;
+    }
 
-    return data;
+    throw lastError;
+  }
+
+  private async allocateClaimNumber(organizationId: string): Promise<string> {
+    const { data, error } = await this.supabase.rpc('allocate_claim_number', {
+      p_organization_id: organizationId,
+    });
+
+    if (!error && typeof data === 'string' && data.trim()) {
+      return data;
+    }
+
+    // The UUID fallback keeps production claim creation collision-proof even
+    // during a rolling deployment where an older database has not yet received
+    // the allocator migration. It is also safe for any future tenant count.
+    console.warn('Claim number allocator unavailable; using UUID fallback.', error?.message);
+    return `CLM-${randomUUID()}`;
   }
 
   private async requireHospitalContext(

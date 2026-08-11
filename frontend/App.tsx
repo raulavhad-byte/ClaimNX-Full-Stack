@@ -2415,6 +2415,7 @@ const AppContent: React.FC = () => {
       const newClaim: Claim = {
         ...claim,
         id: res.data?.id ?? finalId,
+        caseReferenceId: res.data?.claim_number ?? res.data?.case_ref_id ?? finalId,
         patientId,
         hospitalId: persistedHospitalId,
         formData: {
