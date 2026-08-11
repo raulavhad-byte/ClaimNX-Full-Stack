@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Claim, HospitalUser, ClaimStatus, Product } from '../types';
+import { Claim, HospitalUser, ClaimStatus, Product, ROLE_STAGE_ENTITLEMENTS } from '../types';
 import { 
   Stethoscope, Activity, CheckCircle2, AlertTriangle, XCircle, Clock,
   Search, Filter, FileText, FileCheck, BrainCircuit, ZoomIn, Tag,
@@ -49,6 +49,16 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   
   const [selectedClaim, setSelectedClaim] = useState<Claim | null>(null);
+
+  const configuredMedicalStages = useMemo(() => {
+    const configuredKeys = currentUser.allowedStages || [];
+    return new Set(
+      ROLE_STAGE_ENTITLEMENTS
+        .flatMap((group) => group.stages)
+        .filter((stage) => configuredKeys.includes(stage.key))
+        .map((stage) => stage.status),
+    );
+  }, [currentUser.allowedStages]);
 
   // Handle auto-selection from navigation state
   useEffect(() => {
@@ -147,7 +157,11 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
         ClaimStatus.DISCHARGE_QUERY_REPLY
       ].includes(c.status as ClaimStatus);
 
-      if (!isScrutinyRequired || !isStatusMatch) return false;
+      // Role-stage entitlements extend the standard medical queue. This lets
+      // administrators route any configured pre-auth, enhancement, discharge
+      // or medical-query stage to the Medical Officer for scrutiny.
+      const isConfiguredMedicalStage = configuredMedicalStages.has(c.status as ClaimStatus);
+      if (!isScrutinyRequired || (!isStatusMatch && !isConfiguredMedicalStage)) return false;
 
       // Hierarchy filtering: Allow clinical roles to see all cases in their assigned hospitals
       const isClinicalRole = [
@@ -166,7 +180,7 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
       // For other roles, only show their own cases
       return c.createdBy === currentUser.id;
     });
-  }, [claims, visibleHospitals, currentUser, isManager, users]);
+  }, [claims, visibleHospitals, currentUser, isManager, users, configuredMedicalStages]);
 
   const filteredClaims = useMemo(() => {
     return medicalClaims.filter(c => {

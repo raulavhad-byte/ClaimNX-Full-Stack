@@ -1744,8 +1744,14 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
     // Point 7: New Admissions fall to both Medical and CRM KYP bucket
     const activeHospitalId = selectedHospitalId || currentUser.hospitalId || "";
     const activeHospitalProfile = hospitals.find(h => h.id === activeHospitalId);
-    const initialStatus = activeHospitalProfile?.valueAddedServices?.medicalScrutinyRequired 
-      ? ClaimStatus.PENDING_MEDICAL_REVIEW 
+    // Medical scrutiny is the safe default. A hospital must explicitly turn
+    // it off before a new admission can bypass the Medical Underwriting
+    // queue. This also protects hospital users whose full profile is not
+    // loaded into this browser session.
+    const medicalScrutinyRequired =
+      activeHospitalProfile?.valueAddedServices?.medicalScrutinyRequired !== false;
+    const initialStatus = medicalScrutinyRequired
+      ? ClaimStatus.PENDING_MEDICAL_REVIEW
       : ClaimStatus.PRE_AUTH_INITIATED;
 
     const newClaim: Claim = {
