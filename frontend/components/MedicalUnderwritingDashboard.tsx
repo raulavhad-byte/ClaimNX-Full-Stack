@@ -1292,7 +1292,7 @@ function MedicalReviewScreen({ claim, currentUser, onBack, onUpdateClaim }: { cl
         </div>
         <div className="flex items-center gap-3">
           <button 
-            onClick={() => navigate(`/patient-dashboard/${encodeURIComponent(claim.patientName)}?claimId=${encodeURIComponent(claim.id)}&source=medical`, { state: { from: '/medical-underwriting', selectedClaimId: claim.id } })}
+            onClick={() => navigate(`/process-claim/${encodeURIComponent(claim.id)}?source=medical`, { state: { from: '/medical-underwriting', selectedClaimId: claim.id } })}
             className="flex items-center gap-2 bg-green-600 text-white hover:bg-green-700 font-black text-xs uppercase tracking-widest transition-colors px-4 py-2 rounded-lg shadow-lg shadow-green-900/20 mr-4"
           >
             <Eye size={16} /> View Patient Dashboard
