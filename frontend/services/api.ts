@@ -12,6 +12,10 @@ const apiBaseUrl = (
   import.meta.env.VITE_CLAIMNX_API_BASE_URL ?? 'http://localhost:3000'
 ).replace(/\/$/, '');
 
+// Enable this in the shared development/staging environment to ensure API
+// failures are visible instead of being masked by legacy browser storage.
+const strictApiMode = import.meta.env.VITE_CLAIMNX_STRICT_API === 'true';
+
 function getAccessToken(): string | undefined {
   try {
     const legacyToken = window.localStorage.getItem('claimnx_access_token');
@@ -183,6 +187,7 @@ function toUserRequestPayload(user: any, includePassword: boolean): Record<strin
 
 async function safe<T>(remote: Promise<T>, fallback: T): Promise<T> {
   try { return await remote; } catch (error) {
+    if (strictApiMode) throw error;
     console.warn('[ClaimNX] API unavailable; using local data.', error);
     return fallback;
   }
