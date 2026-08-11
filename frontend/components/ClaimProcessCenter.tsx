@@ -616,11 +616,14 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
     const tpaName = claim.formData?.tpa_provider;
     const isTpaCase = claim.formData?.in_house_processing === "No";
 
-    // If it's a TPA case, only show rate list if insurer is one of the national insurers
+    // Prefer a configured TPA list for TPA processing, but always fall back
+    // to the insurer's configured list. The former national-insurer-only
+    // rule incorrectly hid valid Star Health (and other private insurer)
+    // rate lists whenever a TPA value was present on the claim.
     if (isTpaCase) {
-      if (!NATIONAL_INSURERS.includes(insurerName)) return null;
       const tpaCreds = findCredential(tpaName);
       if (tpaCreds?.rateListData) return tpaCreds;
+      if (tpaCreds?.rateListStoragePath) return tpaCreds;
     }
 
     // Default: Show Insurer's rate list
