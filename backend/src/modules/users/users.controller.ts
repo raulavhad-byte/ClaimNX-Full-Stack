@@ -7,8 +7,11 @@ import {
   Body,
   Param,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import { ForbiddenException } from '@nestjs/common';
+import { Request } from 'express';
 
 import { UsersService } from './users.service';
 
@@ -52,12 +55,20 @@ export class UsersController {
   }
 
   @Patch(':id')
-  @Permissions('users.edit')
   async update(
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
+    @Req() request: Request & { user: { id: string; permissions?: string[] } },
   ) {
-    return this.usersService.update(id, dto);
+    const isSelfUpdate = request.user?.id === id;
+    const canEditUsers = request.user?.permissions?.includes('all')
+      || request.user?.permissions?.includes('users.edit');
+
+    if (!isSelfUpdate && !canEditUsers) {
+      throw new ForbiddenException('You do not have permission to update this user.');
+    }
+
+    return this.usersService.update(id, dto, { isSelfUpdate });
   }
 
   @Delete(':id')

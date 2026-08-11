@@ -54,28 +54,44 @@ export class UsersService {
   async update(
     id: string,
     dto: UpdateUserDto,
+    options: { isSelfUpdate?: boolean } = {},
   ) {
     const payload: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
     };
 
-    if (dto.email !== undefined) payload.email = dto.email;
+    // A user can update their own profile/configuration (such as hospital
+    // onboarding and payer tie-ups), but never their access identity. Role,
+    // entity and hospital assignment changes remain administrator-only.
+    if (!options.isSelfUpdate && dto.email !== undefined) payload.email = dto.email;
     if (dto.displayName !== undefined) payload.display_name = dto.displayName;
-    if (dto.role !== undefined) payload.role = dto.role;
-    if (dto.roleId !== undefined) {
-      payload.role_id = dto.roleId;
-    } else if (dto.role !== undefined) {
-      payload.role_id = await this.resolveRoleId(dto.role);
+    if (!options.isSelfUpdate) {
+      if (dto.role !== undefined) payload.role = dto.role;
+      if (dto.roleId !== undefined) {
+        payload.role_id = dto.roleId;
+      } else if (dto.role !== undefined) {
+        payload.role_id = await this.resolveRoleId(dto.role);
+      }
     }
-    if (dto.hospitalId !== undefined) {
+    if (!options.isSelfUpdate && dto.hospitalId !== undefined) {
       const hospitalId = await this.resolveHospitalId(dto.hospitalId);
       // Legacy UI flows can supply another user UUID as a hospital ID. Do
       // not overwrite an existing valid association with that invalid value.
       if (hospitalId) payload.hospital_id = hospitalId;
     }
     if (dto.mobileNo !== undefined) payload.mobile_no = dto.mobileNo;
-    if (dto.entityType !== undefined) payload.entity_type = dto.entityType;
-    if (dto.profileData !== undefined) payload.profile_data = dto.profileData;
+    if (!options.isSelfUpdate && dto.entityType !== undefined) payload.entity_type = dto.entityType;
+    if (dto.profileData !== undefined) {
+      const profileData = { ...dto.profileData };
+      // Never allow a JSON profile document to masquerade as an IAM record.
+      delete profileData.isAdmin;
+      delete profileData.role;
+      delete profileData.roleId;
+      delete profileData.permissions;
+      delete profileData.hospitalId;
+      delete profileData.entityType;
+      payload.profile_data = profileData;
+    }
 
     return this.usersRepository.update(id, payload);
   }
