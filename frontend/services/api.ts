@@ -607,4 +607,10 @@ export const documentsApi = {
     if (category) formData.append('category', category);
     return request('/documents/upload', { method: 'POST', body: formData });
   },
+  listClaimDocuments: async (claimId: string) => {
+    const result = await request(`/documents?claim_id=${encodeURIComponent(claimId)}&limit=100`);
+    return Array.isArray(result) ? result : (result?.data ?? []);
+  },
+  previewClaimDocument: async (documentId: string) =>
+    request(`/documents/${encodeURIComponent(documentId)}/preview`),
 };

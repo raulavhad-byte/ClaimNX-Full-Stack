@@ -21,6 +21,7 @@ import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
 import { DocumentFilterDto } from './dto/document-filter.dto';
 
+@UseGuards(JwtAuthGuard)
 @Controller('documents')
 export class DocumentsController {
   constructor(
@@ -33,7 +34,6 @@ export class DocumentsController {
    * Storage service-role key.
    */
   @Post('upload')
-  @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('file', {
     limits: { fileSize: 25 * 1024 * 1024 },
   }))
@@ -69,6 +69,13 @@ export class DocumentsController {
     @Query() filter: DocumentFilterDto,
   ) {
     return this.documentsService.findAll(filter);
+  }
+
+  @Get(':id/preview')
+  preview(
+    @Param('id') id: string,
+  ) {
+    return this.documentsService.createPreviewUrl(id);
   }
 
   @Get(':id')

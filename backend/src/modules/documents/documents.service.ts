@@ -129,6 +129,30 @@ export class DocumentsService {
     return document;
   }
 
+  async createPreviewUrl(id: string) {
+    const document = await this.findOne(id);
+    const bucketPrefix = `${DocumentsService.claimDocumentsBucket}/`;
+    if (!document.file_path?.startsWith(bucketPrefix)) {
+      throw new BadRequestException('This document is not stored in the secure claim document bucket.');
+    }
+
+    const objectPath = document.file_path.slice(bucketPrefix.length);
+    const { data, error } = await this.databaseService
+      .getClient()
+      .storage
+      .from(DocumentsService.claimDocumentsBucket)
+      .createSignedUrl(objectPath, 10 * 60);
+    if (error || !data?.signedUrl) {
+      throw new BadRequestException(error?.message ?? 'Unable to create a secure document preview.');
+    }
+
+    return {
+      ...document,
+      preview_url: data.signedUrl,
+      preview_expires_in: 10 * 60,
+    };
+  }
+
   async create(dto: CreateDocumentDto) {
     return this.documentsRepository.create(dto);
   }

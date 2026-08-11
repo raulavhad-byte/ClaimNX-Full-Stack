@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { auditService } from '../services/auditService';
+import { documentsApi } from '../services/api';
 import { toast } from 'sonner';
 import PendingTAT from './PendingTAT';
 import { formatDate, parseDate } from '../utils';
@@ -878,6 +879,27 @@ function MedicalReviewScreen({ claim, currentUser, onBack, onUpdateClaim }: { cl
   const [queryTemplate, setQueryTemplate] = useState('');
   const [isSubmittingRPA, setIsSubmittingRPA] = useState(false);
   const [previewFile, setPreviewFile] = useState<{name: string, data: string, type: string} | null>(null);
+  const [storedDocuments, setStoredDocuments] = useState<any[]>([]);
+  const [isLoadingDocuments, setIsLoadingDocuments] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    setIsLoadingDocuments(true);
+    documentsApi.listClaimDocuments(claim.id)
+      .then((documents) => {
+        if (active) setStoredDocuments(documents);
+      })
+      .catch((error) => {
+        // Legacy/in-memory claims may not have stored documents. Do not block
+        // clinical review in that case.
+        console.warn('Unable to load persisted claim documents', error);
+        if (active) setStoredDocuments([]);
+      })
+      .finally(() => {
+        if (active) setIsLoadingDocuments(false);
+      });
+    return () => { active = false; };
+  }, [claim.id]);
 
   const handleSubmitDecision = async () => {
     if (!decision) {
@@ -1130,9 +1152,43 @@ function MedicalReviewScreen({ claim, currentUser, onBack, onUpdateClaim }: { cl
         uploadedAt: d.uploadedAt || claim.updatedAt || claim.createdAt || new Date().toISOString()
       });
     });
+    storedDocuments.forEach((document) => {
+      addUnique({
+        documentId: document.id,
+        name: document.file_name || 'Claim Document',
+        type: document.category || document.mime_type || 'Claim Document',
+        mimeType: document.mime_type || 'application/pdf',
+        uploadedAt: document.uploaded_at || document.created_at,
+        fileSize: document.file_size,
+      });
+    });
     
     return uniqueDocs;
-  }, [claim]);
+  }, [claim, storedDocuments]);
+
+  const openDocumentPreview = async (document: any) => {
+    try {
+      if (document.documentId) {
+        const preview = await documentsApi.previewClaimDocument(document.documentId);
+        setPreviewFile({
+          name: preview.file_name || document.name,
+          data: preview.preview_url,
+          type: preview.mime_type || document.mimeType || 'application/pdf',
+        });
+        return;
+      }
+      const data = document.data || document.url;
+      if (!data) throw new Error('This document does not have preview data.');
+      setPreviewFile({
+        name: document.name,
+        data,
+        type: document.mimeType || (data.startsWith('data:image') ? 'image/png' : 'application/pdf'),
+      });
+    } catch (error) {
+      console.error('Unable to preview claim document', error);
+      toast.error('Unable to open this document preview.');
+    }
+  };
 
   const aiInsights = useMemo(() => {
     // Mock AI insights based on claim data
@@ -1245,7 +1301,7 @@ function MedicalReviewScreen({ claim, currentUser, onBack, onUpdateClaim }: { cl
                   {allDocs.map((doc: any, idx: number) => (
                     <div 
                       key={idx} 
-                      onClick={() => setPreviewFile({ name: doc.name, data: doc.data || doc.url, type: doc.mimeType || (doc.data?.startsWith('data:image') ? 'image/png' : 'application/pdf') })}
+                      onClick={() => openDocumentPreview(doc)}
                       className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-start gap-4 group hover:border-blue-300 transition-colors cursor-pointer animate-in fade-in duration-300"
                     >
                       <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-lg flex items-center justify-center shrink-0 border border-blue-100 shadow-sm">
@@ -1264,7 +1320,13 @@ function MedicalReviewScreen({ claim, currentUser, onBack, onUpdateClaim }: { cl
                       </button>
                     </div>
                   ))}
-                  {allDocs.length === 0 && (
+                  {isLoadingDocuments && (
+                    <div className="col-span-2 text-center py-12 text-slate-500 bg-white rounded-xl border border-dashed border-slate-300">
+                      <Loader2 className="mx-auto h-8 w-8 animate-spin text-blue-500 mb-3" />
+                      <p className="text-sm font-medium text-slate-700">Loading claim documents…</p>
+                    </div>
+                  )}
+                  {!isLoadingDocuments && allDocs.length === 0 && (
                     <div className="col-span-2 text-center py-12 text-slate-500 bg-white rounded-xl border border-dashed border-slate-300">
                       <FileWarning className="mx-auto h-12 w-12 text-slate-300 mb-3" />
                       <p className="text-lg font-medium text-slate-900">No documents uploaded</p>
