@@ -202,6 +202,35 @@ function toUserRequestPayload(user: any, includePassword: boolean): Record<strin
     assignedHospitalIds: Array.isArray(user?.assignedHospitalIds)
       ? user.assignedHospitalIds
       : [],
+    // Hospital insurance tie-up metadata. Passwords are intentionally not
+    // copied into profile_data; browser-readable JSON must never hold payer
+    // portal secrets.
+    portalCredentials: Array.isArray(user?.portalCredentials)
+      ? user.portalCredentials.map((credential: any) => ({
+        entityId: credential?.entityId ?? '',
+        username: credential?.username ?? '',
+        startDate: credential?.startDate ?? '',
+        endDate: credential?.endDate ?? '',
+        rateListName: credential?.rateListName ?? '',
+      }))
+      : [],
+    hospitalSeal: user?.hospitalSeal ?? '',
+    doctorStamp: user?.doctorStamp ?? '',
+    agreementType: user?.agreementType ?? '',
+    agreementValue: user?.agreementValue ?? 0,
+    agreementStartDate: user?.agreementStartDate ?? '',
+    agreementRenewalDate: user?.agreementRenewalDate ?? '',
+    agreementStageValues: Array.isArray(user?.agreementStageValues)
+      ? user.agreementStageValues
+      : [],
+    agreementInvoiceCategories: Array.isArray(user?.agreementInvoiceCategories)
+      ? user.agreementInvoiceCategories
+      : [],
+    agreementPercentageBase: user?.agreementPercentageBase ?? '',
+    valueAddedServices: user?.valueAddedServices ?? {},
+    allowedStages: Array.isArray(user?.allowedStages) ? user.allowedStages : [],
+    invoiceGenerationType: user?.invoiceGenerationType ?? '',
+    statusReason: user?.statusReason ?? '',
   };
   const payload: Record<string, unknown> = {
     email: user?.emailId ?? user?.email,
