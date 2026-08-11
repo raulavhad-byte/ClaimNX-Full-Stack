@@ -185,6 +185,51 @@ function toUserRequestPayload(user: any, includePassword: boolean): Record<strin
   );
 }
 
+function toPortalInsuranceEntity(entity: any): any {
+  let metadata: Record<string, unknown> = {};
+  if (typeof entity?.data === 'string' && entity.data) {
+    try { metadata = JSON.parse(entity.data) as Record<string, unknown>; } catch { /* preserve legacy data */ }
+  }
+
+  return {
+    ...metadata,
+    ...entity,
+    name: entity?.name ?? entity?.display_name ?? '',
+    emailId: entity?.emailId ?? entity?.email_id ?? '',
+    settlementEmail: entity?.settlementEmail ?? metadata.settlementEmail ?? '',
+    portalLink: entity?.portalLink ?? entity?.portal_link ?? '',
+    automationType: entity?.automationType ?? entity?.automation_type ?? 'Portal',
+    onPanel: entity?.onPanel ?? entity?.on_panel ?? true,
+    rpaSupported: entity?.rpaSupported ?? entity?.rpa_supported ?? false,
+    autoEmailEnabled: entity?.autoEmailEnabled ?? entity?.auto_email_enabled ?? true,
+    templateName: entity?.templateName ?? entity?.template_name ?? metadata.templateName,
+    regionalContacts: entity?.regionalContacts ?? metadata.regionalContacts ?? [],
+  };
+}
+
+function toInsuranceRequestPayload(entity: any): Record<string, unknown> {
+  const metadata = {
+    settlementEmail: entity?.settlementEmail ?? '',
+    state: entity?.state ?? '',
+    district: entity?.district ?? '',
+    zone: entity?.zone ?? '',
+    regionalContacts: entity?.regionalContacts ?? [],
+  };
+
+  return {
+    name: entity?.name,
+    email_id: entity?.emailId,
+    portal_link: entity?.portalLink,
+    type: entity?.type,
+    automation_type: entity?.automationType,
+    on_panel: entity?.onPanel,
+    rpa_supported: entity?.rpaSupported,
+    auto_email_enabled: entity?.autoEmailEnabled,
+    template_name: entity?.templateName,
+    data: JSON.stringify(metadata),
+  };
+}
+
 async function safe<T>(remote: Promise<T>, fallback: T): Promise<T> {
   try { return await remote; } catch (error) {
     if (strictApiMode) throw error;
@@ -258,13 +303,34 @@ export const usersApi = {
 const configResource = createLegacyResource('/v1/configurations');
 export const configApi = {
   ...configResource,
-  getInsurers: async () => ({ data: localArray('claimnx_insurers') }),
+  getInsurers: async () => ({
+    data: collectionFrom(
+      await safe(request('/insurance'), localArray('claimnx_insurers')),
+      localArray('claimnx_insurers'),
+    ).map(toPortalInsuranceEntity),
+  }),
   getRoles: async () => ({ data: localArray('claimnx_roles') }),
   getFields: async () => ({ data: localArray('claimnx_fields') }),
   addRole: async (role: any) => { const all = [...localArray('claimnx_roles'), role]; saveLocal('claimnx_roles', all); return { data: role }; },
   updateRole: async (id: string, role: any) => { saveLocal('claimnx_roles', localArray('claimnx_roles').map((item) => item.id === id ? role : item)); return { data: role }; },
   deleteRole: async (id: string) => { saveLocal('claimnx_roles', localArray('claimnx_roles').filter((item) => item.id !== id)); return { data: null }; },
-  updateInsurer: async (id: string, insurer: any) => { saveLocal('claimnx_insurers', localArray('claimnx_insurers').map((item) => item.id === id ? insurer : item)); return { data: insurer }; },
+  createInsurer: async (insurer: any) => {
+    const created = toPortalInsuranceEntity(await request('/insurance', {
+      method: 'POST',
+      body: JSON.stringify(toInsuranceRequestPayload(insurer)),
+    }));
+    saveLocal('claimnx_insurers', [...localArray('claimnx_insurers'), created]);
+    return { data: created };
+  },
+  updateInsurer: async (id: string, insurer: any) => {
+    const updated = toPortalInsuranceEntity(await request(`/insurance/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(toInsuranceRequestPayload(insurer)),
+    }));
+    const all = localArray('claimnx_insurers').map((item) => item.id === id ? updated : item);
+    saveLocal('claimnx_insurers', all);
+    return { data: updated };
+  },
   resetDummyData: async () => ({ data: null }),
 };
 

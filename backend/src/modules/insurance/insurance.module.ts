@@ -1,6 +1,10 @@
 import { Module } from '@nestjs/common';
 
+import { DatabaseModule } from '../../database/database.module';
 import { SharedModule } from '../../shared/shared.module';
+
+import { InsuranceController } from './insurance.controller';
+import { InsuranceService } from './insurance.service';
 
 import { InsuranceAccessService } from './application/insurance-access.service';
 import { HospitalInsurancePartnerIntegrationUseCases } from './application/hospital-insurance-partner-integration.use-cases';
@@ -20,13 +24,16 @@ import { HospitalPayerIntegrationV1Controller } from './presentation/controllers
 
 @Module({
   imports: [
+    DatabaseModule,
     SharedModule,
   ],
   controllers: [
+    InsuranceController,
     InsurancePartnerController,
     HospitalPayerIntegrationV1Controller,
   ],
   providers: [
+    InsuranceService,
     InsuranceAccessService,
     HospitalPayerIntegrationReferenceDataService,
     HospitalInsurancePartnerIntegrationUseCases,

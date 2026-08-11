@@ -381,18 +381,26 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     if (!editingEntity) return;
     const list = connectorSubTab === 'Insurers' ? insurers : tpas;
     const setter = connectorSubTab === 'Insurers' ? setInsurers : setTpas;
+
+    if (!editingEntity.name.trim() || !editingEntity.emailId.trim() || !editingEntity.portalLink.trim()) {
+      toast.error('Entity name, claims email, and portal link are required for database persistence.');
+      return;
+    }
     
     try {
-      // Persist the entity edit/creation to the backend
-      await configApi.updateInsurer(editingEntity.id, editingEntity);
+      const isNewEntity = editingEntity.id.startsWith('ent-');
+      const response = isNewEntity
+        ? await configApi.createInsurer(editingEntity)
+        : await configApi.updateInsurer(editingEntity.id, editingEntity);
+      const savedEntity = response.data;
       
-      if (list.some(e => e.id === editingEntity.id)) {
-        setter(list.map(e => e.id === editingEntity.id ? editingEntity : e));
+      if (list.some(e => e.id === savedEntity.id)) {
+        setter(list.map(e => e.id === savedEntity.id ? savedEntity : e));
       } else {
-        setter([...list, editingEntity]);
+        setter([...list, savedEntity]);
       }
       
-      toast.success(`${editingEntity.type} "${editingEntity.name}" configured and saved successfully!`);
+      toast.success(`${savedEntity.type} "${savedEntity.name}" configured and saved successfully!`);
       setIsEntityModalOpen(false);
       setEditingEntity(null);
     } catch (err: any) {
