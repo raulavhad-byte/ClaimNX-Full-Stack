@@ -117,6 +117,27 @@ export class ClaimsService {
       throw new BadRequestException('The Hospital profile needs a hospital name before creating a claim.');
     }
 
+    // These are mandatory legacy columns in the hospitals table. Reuse the
+    // configured default values rather than inserting null and failing after
+    // the patient record has already been created.
+    const { data: hospitalDefaults, error: defaultsError } = await this.supabase
+      .from('hospitals')
+      .select('hospital_type_reference_value_id, operational_status_reference_value_id')
+      .eq('is_deleted', false)
+      .not('hospital_type_reference_value_id', 'is', null)
+      .not('operational_status_reference_value_id', 'is', null)
+      .limit(1)
+      .maybeSingle<{
+        hospital_type_reference_value_id: string;
+        operational_status_reference_value_id: string;
+      }>();
+    if (defaultsError) throw defaultsError;
+    if (!hospitalDefaults) {
+      throw new BadRequestException(
+        'Hospital master configuration is incomplete. Configure a Hospital Type and Operational Status before onboarding hospitals.',
+      );
+    }
+
     const { data: createdHospital, error: createHospitalError } = await this.supabase
       .from('hospitals')
       .insert({
@@ -124,6 +145,9 @@ export class ClaimsService {
         hospital_name: hospitalName,
         display_name: hospitalName,
         hospital_code: `HOSP-${randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase()}`,
+        hospital_type: 'General Hospital',
+        hospital_type_reference_value_id: hospitalDefaults.hospital_type_reference_value_id,
+        operational_status_reference_value_id: hospitalDefaults.operational_status_reference_value_id,
         rohini_id: profile.rohiniId ? String(profile.rohiniId) : null,
         address: profile.address ? String(profile.address) : null,
         district: profile.district ? String(profile.district) : null,
