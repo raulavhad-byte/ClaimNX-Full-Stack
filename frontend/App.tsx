@@ -1215,14 +1215,17 @@ const AppContent: React.FC = () => {
         const parsed = JSON.parse(saved);
         if (parsed && parsed.length > 0) {
           const updated = [...parsed];
-          const hasFinance = updated.some((r: any) => r.name.toLowerCase() === 'finance team');
+          const hasFinance = updated.some((r: any) => String(r.name ?? '').toLowerCase() === 'finance team');
           if (!hasFinance) {
             const defaultFinance = INITIAL_ROLES.find(r => r.name.toLowerCase() === 'finance team');
             if (defaultFinance) {
               updated.push(defaultFinance);
             }
           }
-          const hasPolicyAudit = updated.some((r: any) => r.name.toLowerCase() === 'policy audit team' || r.name.toLowerCase() === 'policy audit team role');
+          const hasPolicyAudit = updated.some((r: any) => {
+            const roleName = String(r.name ?? '').toLowerCase();
+            return roleName === 'policy audit team' || roleName === 'policy audit team role';
+          });
           if (!hasPolicyAudit) {
             const defaultPolicyAudit = INITIAL_ROLES.find(r => r.name.toLowerCase() === 'policy audit team' || r.name.toLowerCase() === 'policy audit team role');
             if (defaultPolicyAudit) {
@@ -1310,7 +1313,7 @@ const AppContent: React.FC = () => {
             // Restore Policy Audit team and Finance Team roles if missing
             const updatedFetchedRoles = [...fetchedRoles];
             
-            const hasFinance = updatedFetchedRoles.some((r: any) => r.name.toLowerCase() === 'finance team');
+            const hasFinance = updatedFetchedRoles.some((r: any) => String(r.name ?? '').toLowerCase() === 'finance team');
             if (!hasFinance) {
               const defaultFinance = INITIAL_ROLES.find(r => r.name.toLowerCase() === 'finance team');
               if (defaultFinance) {
@@ -1319,7 +1322,10 @@ const AppContent: React.FC = () => {
               }
             }
 
-            const hasPolicyAudit = updatedFetchedRoles.some((r: any) => r.name.toLowerCase() === 'policy audit team' || r.name.toLowerCase() === 'policy audit team role');
+            const hasPolicyAudit = updatedFetchedRoles.some((r: any) => {
+              const roleName = String(r.name ?? '').toLowerCase();
+              return roleName === 'policy audit team' || roleName === 'policy audit team role';
+            });
             if (!hasPolicyAudit) {
               const defaultPolicyAudit = INITIAL_ROLES.find(r => r.name.toLowerCase() === 'policy audit team' || r.name.toLowerCase() === 'policy audit team role');
               if (defaultPolicyAudit) {
@@ -1332,7 +1338,7 @@ const AppContent: React.FC = () => {
           } else {
             // If DB/backend returned empty list or failed, load/merge state from localStorage/INITIAL_ROLES
             const currentRoles = [...roles];
-            const hasFinance = currentRoles.some((r: any) => r.name.toLowerCase() === 'finance team');
+            const hasFinance = currentRoles.some((r: any) => String(r.name ?? '').toLowerCase() === 'finance team');
             if (!hasFinance) {
               const defaultFinance = INITIAL_ROLES.find(r => r.name.toLowerCase() === 'finance team');
               if (defaultFinance) {
@@ -1340,7 +1346,10 @@ const AppContent: React.FC = () => {
                 configApi.addRole(defaultFinance).catch(err => console.error("Failed to default-init Finance Team role", err));
               }
             }
-            const hasPolicyAudit = currentRoles.some((r: any) => r.name.toLowerCase() === 'policy audit team' || r.name.toLowerCase() === 'policy audit team role');
+            const hasPolicyAudit = currentRoles.some((r: any) => {
+              const roleName = String(r.name ?? '').toLowerCase();
+              return roleName === 'policy audit team' || roleName === 'policy audit team role';
+            });
             if (!hasPolicyAudit) {
               const defaultPolicyAudit = INITIAL_ROLES.find(r => r.name.toLowerCase() === 'policy audit team' || r.name.toLowerCase() === 'policy audit team role');
               if (defaultPolicyAudit) {
@@ -2000,7 +2009,7 @@ const AppContent: React.FC = () => {
      if (hospitalProfile.role?.toUpperCase() === 'SUPER ADMIN' || hospitalProfile.role?.toUpperCase() === 'ADMIN') return ['all'];
      const normalizedProfileRole = hospitalProfile.role?.trim().toLowerCase().replace(/\s+role$/i, '');
      const roleObj = roles.find(r => {
-       const normalizedRoleName = r.name.trim().toLowerCase().replace(/\s+role$/i, '');
+       const normalizedRoleName = String(r.name ?? '').trim().toLowerCase().replace(/\s+role$/i, '');
        return normalizedRoleName === normalizedProfileRole || (normalizedProfileRole === 'hospital user' && normalizedRoleName === 'hospital');
      });
      let perms = roleObj ? [...roleObj.permissions] : [];
@@ -2090,7 +2099,7 @@ const AppContent: React.FC = () => {
     // 0. Role Status Check
     const normalizedProfileRole = hospitalProfile.role?.trim().toLowerCase().replace(/\s+role$/i, '');
     const rObj = roles.find(r => {
-      const normalizedRoleName = r.name.trim().toLowerCase().replace(/\s+role$/i, '');
+      const normalizedRoleName = String(r.name ?? '').trim().toLowerCase().replace(/\s+role$/i, '');
       return normalizedRoleName === normalizedProfileRole || (normalizedProfileRole === 'hospital user' && normalizedRoleName === 'hospital');
     });
     if (rObj && rObj.status === 'Inactive') return false;
