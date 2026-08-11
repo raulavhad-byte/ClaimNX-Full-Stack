@@ -37,6 +37,7 @@ import { formatDate, formatDateTime, safeHtml2Canvas } from '../utils';
 import { KYPPolicy, KYPStatus, Claim, ClaimStatus, Product, HospitalUser, InsuranceEntity } from '../types';
 import { toast } from 'sonner';
 import { auditService } from '../services/auditService';
+import { documentsApi } from '../services/api';
 import jsPDF from 'jspdf';
 
 interface KYPFormProps {
@@ -133,6 +134,7 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
   const [isDocMaximized, setIsDocMaximized] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [policyFile, setPolicyFile] = useState<string | null>(null);
+  const [persistedClaimDocs, setPersistedClaimDocs] = useState<{ url: string; name: string }[]>([]);
 
   // Auto-show preview in view mode for completed cases
   useEffect(() => {
@@ -141,9 +143,40 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
     }
   }, [viewMode, policy?.status]);
   
-  // Handle multiple documents from claim history
+  // Claim uploads are stored privately by the backend. Fetch signed previews
+  // instead of relying on obsolete inline/base64 document data in browser
+  // state, which is intentionally stripped before persistence.
+  useEffect(() => {
+    let active = true;
+    if (!claim?.id) {
+      setPersistedClaimDocs([]);
+      return () => { active = false; };
+    }
+
+    void (async () => {
+      try {
+        const records = await documentsApi.listClaimDocuments(claim.id);
+        const previews = await Promise.all(records.map(async (record: any) => {
+          const preview = await documentsApi.previewClaimDocument(record.id);
+          return {
+            url: preview?.preview_url ?? preview?.data?.preview_url ?? '',
+            name: record.file_name ?? record.name ?? 'Claim document',
+          };
+        }));
+        if (active) setPersistedClaimDocs(previews.filter((document) => document.url));
+      } catch (error) {
+        console.warn('Unable to load persisted claim documents for Policy Audit.', error);
+        if (active) setPersistedClaimDocs([]);
+      }
+    })();
+
+    return () => { active = false; };
+  }, [claim?.id]);
+
+  // Handle multiple documents from the secure store, claim history, and
+  // legacy local state during migration.
   const claimDocs = useMemo(() => {
-    const allDocs: {url: string, name: string}[] = [];
+    const allDocs: {url: string, name: string}[] = [...persistedClaimDocs];
     
     // Add processed/uploaded policy file if it exists in state
     if (policyFile) {
@@ -204,7 +237,7 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
     }
 
     return allDocs;
-  }, [claim, policyFile]);
+  }, [claim, policyFile, persistedClaimDocs]);
 
   const [viewingDocument, setViewingDocument] = useState<{ url: string, name: string } | null>(null);
 

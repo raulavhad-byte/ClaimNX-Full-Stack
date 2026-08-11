@@ -204,6 +204,12 @@ function claimUpdatePayload(claim: any): Record<string, unknown> {
     assignedMedicalUserId: claim?.assignedMedicalUserId,
     assignedMedicalUserName: claim?.assignedMedicalUserName,
     isAccepted: claim?.isAccepted,
+    // KYP/Policy Audit has its own acceptance queue. Keep this separate from
+    // the medical-review acceptance flag so a reload cannot send an accepted
+    // Policy Audit case back to Pending.
+    isKypAccepted: claim?.isKypAccepted ?? formData?.isKypAccepted,
+    assignedOpsUserId: claim?.assignedOpsUserId ?? formData?.assignedOpsUserId,
+    assignedOpsUserName: claim?.assignedOpsUserName ?? formData?.assignedOpsUserName,
     isMedicallyApproved: claim?.isMedicallyApproved,
     submissionStatus: claim?.submissionStatus,
     failureType: claim?.failureType,
@@ -424,6 +430,7 @@ function toPortalClaim(claim: any): any {
     patientId: claim?.patientId ?? claim?.patient_id ?? '',
     patientName: claim?.patientName ?? formData?.p_name ?? formData?.patient_name ?? 'Unknown Patient',
     hospitalId: claim?.hospitalId ?? claim?.hospital_id ?? formData?.hospitalId ?? '',
+    hospitalName: claim?.hospitalName ?? claim?.hospital_name ?? formData?.hospitalName ?? formData?.hospital_name ?? '',
     insuranceProvider: claim?.insuranceProvider ?? formData?.insurance_company ?? '',
     policyNumber: claim?.policyNumber ?? formData?.p_policy_no ?? formData?.policyNumber ?? '',
     estimatedCost: Number(claim?.estimatedCost ?? claim?.estimated_cost ?? claim?.amount ?? 0),
@@ -435,6 +442,9 @@ function toPortalClaim(claim: any): any {
     assignedMedicalUserId: claim?.assignedMedicalUserId ?? formData?.assignedMedicalUserId,
     assignedMedicalUserName: claim?.assignedMedicalUserName ?? formData?.assignedMedicalUserName,
     isAccepted: Boolean(claim?.isAccepted ?? formData?.isAccepted),
+    isKypAccepted: Boolean(claim?.isKypAccepted ?? formData?.isKypAccepted),
+    assignedOpsUserId: claim?.assignedOpsUserId ?? formData?.assignedOpsUserId,
+    assignedOpsUserName: claim?.assignedOpsUserName ?? formData?.assignedOpsUserName,
     isMedicallyApproved: Boolean(claim?.isMedicallyApproved ?? formData?.isMedicallyApproved),
     submissionStatus: claim?.submissionStatus ?? formData?.submissionStatus,
     failureType: claim?.failureType ?? formData?.failureType,
@@ -442,6 +452,7 @@ function toPortalClaim(claim: any): any {
     formData: {
       ...formData,
       hospitalId: claim?.hospital_id ?? formData?.hospitalId ?? '',
+      hospitalName: claim?.hospitalName ?? claim?.hospital_name ?? formData?.hospitalName ?? formData?.hospital_name ?? '',
       product,
     },
     history: Array.isArray(claim?.history)

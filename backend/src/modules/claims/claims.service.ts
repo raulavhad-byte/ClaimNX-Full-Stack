@@ -270,7 +270,30 @@ export class ClaimsService {
 
     if (error) throw error;
 
-    return data;
+    // Keep the hospital identifier as the relational source of truth, but
+    // enrich read models with its display name. Queue screens must not expose
+    // a UUID when a legacy claim predates the hospital-name snapshot.
+    const hospitalIds = [...new Set((data ?? []).map((claim) => claim.hospital_id).filter(Boolean))];
+    if (hospitalIds.length === 0) return data;
+
+    const { data: hospitalRows, error: hospitalError } = await this.supabase
+      .from('hospitals')
+      .select('id, hospital_name, display_name')
+      .in('id', hospitalIds);
+
+    if (hospitalError) throw hospitalError;
+
+    const namesById = new Map(
+      (hospitalRows ?? []).map((hospital) => [
+        hospital.id,
+        hospital.display_name || hospital.hospital_name,
+      ]),
+    );
+
+    return (data ?? []).map((claim) => ({
+      ...claim,
+      hospital_name: namesById.get(claim.hospital_id) ?? null,
+    }));
   }
 
   async findOne(id: string) {

@@ -65,7 +65,10 @@ const KYPDashboard: React.FC<KYPDashboardProps> = ({
         return hosp.hospitalName || hosp.displayName || hosp.name;
       }
     }
-    return linkedClaim?.formData?.hospital_name || linkedClaim?.formData?.hospitalName || linkedClaim?.hospitalId || 'N/A';
+    return linkedClaim?.formData?.hospital_name
+      || linkedClaim?.formData?.hospitalName
+      || (linkedClaim as any)?.hospitalName
+      || 'N/A';
   };
 
   const [searchParams] = useSearchParams();
@@ -785,7 +788,15 @@ const KYPDashboard: React.FC<KYPDashboardProps> = ({
                                     }
                                   }
 
-                                  setPolicies(prev => prev.map(p => p.id === policy.id ? updatedPolicy : p));
+                                  // Claims generated from New Admission do not have a
+                                  // separate policy row. Keep an optimistic row here
+                                  // while the persisted claim update is in flight.
+                                  setPolicies(prev => {
+                                    const exists = prev.some(p => p.id === policy.id);
+                                    return exists
+                                      ? prev.map(p => p.id === policy.id ? updatedPolicy : p)
+                                      : [updatedPolicy, ...prev];
+                                  });
                                   toast.success("Case accepted moves to Under Review");
                                   setStatusFilter('Under Review');
                                   handleEdit(updatedPolicy, false);

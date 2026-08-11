@@ -2379,6 +2379,17 @@ const AppContent: React.FC = () => {
         throw new Error('Unable to create the patient record in the database.');
       }
 
+      // Store a display-name snapshot with the claim. Operational queues use
+      // hospital IDs for joins and tenancy, but must never render those IDs to
+      // users when the directory cache is unavailable.
+      const hospitalNameSnapshot = String(
+        claim.formData?.hospitalName
+        ?? claim.formData?.hospital_name
+        ?? hospitalProfile.hospitalName
+        ?? hospitalProfile.displayName
+        ?? '',
+      ).trim();
+
       const res = await claimsApi.create({
         hospital_id: resolvedHospitalId,
         patient_id: patientId,
@@ -2395,6 +2406,8 @@ const AppContent: React.FC = () => {
           caseSource: claim.caseSource || 'Internal User',
           policyNumber: claim.policyNumber,
           product: claim.product,
+          hospitalName: hospitalNameSnapshot,
+          hospital_name: hospitalNameSnapshot,
           // Persist a hospital location snapshot with every claim. This lets
           // role-based queues enforce Zone/State/District assignments without
           // exposing the full hospital directory to operational users.
@@ -2421,6 +2434,8 @@ const AppContent: React.FC = () => {
         formData: {
           ...claim.formData,
           hospitalId: persistedHospitalId,
+          hospitalName: hospitalNameSnapshot,
+          hospital_name: hospitalNameSnapshot,
         },
       };
 
