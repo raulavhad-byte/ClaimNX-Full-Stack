@@ -4,6 +4,7 @@ import { ShieldCheck, Lock, Mail, Loader2, Hospital, Zap, ShieldAlert, ChevronRi
 import { toast } from 'sonner';
 import { auditService } from '../services/auditService';
 import { DISABLE_FIRESTORE } from '../services/dualStorageService';
+import { claimnxSessionService } from '../services/claimnx-session-service';
 
 interface LoginProps {
   onLogin: (username: string) => void;
@@ -69,79 +70,69 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     }
 
     try {
-      // Force bypass for specific user for demo/entry if Firebase provider is disabled
-      if (email === 'raulavhad@gmail.com' && password === 'Pass@2026') {
-        console.log("Using primary admin bypass...");
-        localStorage.setItem('claimnx_manual_auth', email);
-        onLogin(email);
+      // The NestJS API is the source of truth for production authentication.
+      await claimnxSessionService.login(email.trim(), password);
+      localStorage.setItem('claimnx_manual_auth', email.trim());
+
+      auditService.log({
+        userId: email.trim(),
+        action: 'USER_LOGIN',
+        resourceType: 'Auth',
+        resourceId: email.trim(),
+        newValues: { email: email.trim(), loginTime: new Date().toISOString() },
+      });
+
+      onLogin(email.trim());
+      return;
+    } catch (backendAuthError: any) {
+      // Legacy browser-only authentication is retained solely for local Vite
+      // development while the remaining portal screens are migrated.
+      if (!import.meta.env.DEV || !DISABLE_FIRESTORE) {
+        setError(backendAuthError?.message || 'Unable to sign in. Please verify your credentials.');
         return;
       }
 
-      if (DISABLE_FIRESTORE) {
-        console.log("[Auth] Using Local Authentication Mode");
-        // In local mode, check if the user exists in our local cache
+      console.warn('[Auth] Backend login unavailable; using local development authentication.', backendAuthError);
+
+      try {
         const localUsersKey = 'claimnx_hospital_users';
         let localUsers: any[] = [];
         try {
           localUsers = JSON.parse(localStorage.getItem(localUsersKey) || '[]');
-        } catch (e) {
+        } catch (localStorageError) {
           try {
             localUsers = JSON.parse(localStorage.getItem('claimnx_users') || '[]');
-          } catch (e2) {}
+          } catch {
+            localUsers = [];
+          }
         }
 
-        const user = localUsers.find((u: any) => 
-          u.username?.toLowerCase() === email.toLowerCase() || 
-          u.email?.toLowerCase() === email.toLowerCase() || 
-          u.emailId?.toLowerCase() === email.toLowerCase()
+        const user = localUsers.find((candidate: any) =>
+          candidate.username?.toLowerCase() === email.toLowerCase() ||
+          candidate.email?.toLowerCase() === email.toLowerCase() ||
+          candidate.emailId?.toLowerCase() === email.toLowerCase(),
         );
-        
-        if (user) {
-          if (user.password && user.password !== password) {
-            setError("Invalid Access Key. Please check your password.");
-            setIsLoading(false);
-            return;
-          }
-          if (password.length > 3) {
-            localStorage.setItem('claimnx_manual_auth', email);
-            onLogin(email);
-            return;
-          } else {
-            setError("Access Key must be at least 4 characters.");
-            setIsLoading(false);
-            return;
-          }
-        } else {
-          // Check if it's the primary admin and allow first-time setup
-          if (email.toLowerCase() === 'raulavhad@gmail.com') {
-            localStorage.setItem('claimnx_manual_auth', email);
-            onLogin(email);
-            return;
-          }
-          setError("Account not found in local storage. Please check your Log-in ID or reset your password.");
-          setIsLoading(false);
+
+        if (user && (!user.password || user.password === password) && password.length > 3) {
+          localStorage.setItem('claimnx_manual_auth', email);
+          onLogin(email);
           return;
         }
-      }
 
-      localStorage.setItem('claimnx_manual_auth', email);
-      
-      auditService.log({
-        userId: email,
-        action: 'USER_LOGIN',
-        resourceType: 'Auth',
-        resourceId: email,
-        newValues: { email, loginTime: new Date().toISOString() }
-      });
+        if (email.toLowerCase() === 'raulavhad@gmail.com' && password.length > 3) {
+          localStorage.setItem('claimnx_manual_auth', email);
+          onLogin(email);
+          return;
+        }
 
-      onLogin(email);
-    } catch (err: any) {
-      if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
-        setError("Invalid credentials. Please check your Log-in ID and Access Key.");
-      } else {
-        setError(err.message || "Login failed. Please try again.");
+        setError('Account not found in local development storage.');
+        return;
+      } catch (localAuthError: any) {
+        setError(localAuthError?.message || 'Unable to sign in using local development storage.');
+        return;
       }
-    } finally {
+    }
+    finally {
       setIsLoading(false);
     }
   };
