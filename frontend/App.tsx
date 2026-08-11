@@ -2289,6 +2289,9 @@ const AppContent: React.FC = () => {
 
   const handleCreateClaim = async (claim: Claim, options?: { preventNavigation?: boolean }) => {
     try {
+      const isUuid = (value: unknown): value is string =>
+        typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
       // If we are finalizing a draft or using a temporary ID, delete the old draft claim
       const isDraftFinalization = claim.id?.startsWith('CL-DRAFT-') || claim.id?.startsWith('CL-') || claim.id?.startsWith('CLM-');
       if (isDraftFinalization && claim.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(claim.id)) {
@@ -2306,23 +2309,71 @@ const AppContent: React.FC = () => {
 
       const getValidHospitalId = () => {
         const id = claim.hospitalId || claim.formData?.hospitalId || getScopeId(hospitalProfile);
-        if (id && (id.toLowerCase().startsWith('hosp-') || id === 'HOSP-001')) {
+        if (isUuid(id)) {
           return id;
         }
-        if (visibleHospitals && visibleHospitals.length > 0) {
-          return visibleHospitals[0].id;
+        const databaseHospital = visibleHospitals.find((hospital) => isUuid(hospital.id));
+        if (databaseHospital) {
+          return databaseHospital.id;
         }
-        return 'HOSP-001';
+        return '';
       };
       const resolvedHospitalId = getValidHospitalId();
 
-      const res = await claimsApi.create({ 
-        ...claim, 
-        id: finalId,
-        hospitalId: resolvedHospitalId,
-        caseSource: claim.caseSource || 'Internal User' // Identify source (Point 3)
+      if (!resolvedHospitalId) {
+        throw new Error('This account is not linked to a database hospital. Please complete Hospital Onboarding before creating a claim.');
+      }
+
+      const payerName = claim.formData?.in_house_processing === 'No'
+        ? claim.formData?.tpa_provider
+        : claim.formData?.insurance_company;
+      const payer = [...insurers, ...tpas].find(
+        (entity) => entity.name?.trim().toLowerCase() === String(payerName ?? claim.insuranceProvider ?? '').trim().toLowerCase(),
+      );
+      if (!payer || !isUuid(payer.id)) {
+        throw new Error('Select an insurer or TPA that is available in the database before creating the claim.');
+      }
+
+      let patientId = claim.patientId;
+      if (!isUuid(patientId)) {
+        const patient = await patientsApi.create({
+          name: claim.patientName,
+          gender: claim.formData?.p_gender === 'Third Gender' ? 'Other' : claim.formData?.p_gender,
+          dob: claim.formData?.p_dob || undefined,
+          contact: claim.formData?.p_contact || undefined,
+          address: claim.formData?.p_address || undefined,
+          uhid: claim.formData?.p_uhid || undefined,
+        });
+        patientId = patient?.id;
+      }
+      if (!isUuid(patientId)) {
+        throw new Error('Unable to create the patient record in the database.');
+      }
+
+      const res = await claimsApi.create({
+        hospital_id: resolvedHospitalId,
+        patient_id: patientId,
+        payer_id: payer.id,
+        case_ref_id: finalId,
+        status: claim.status,
+        amount: Number(claim.estimatedCost || 0),
+        estimated_cost: Number(claim.estimatedCost || 0),
+        diagnosis: claim.diagnosis,
+        admission_date: claim.admissionDate,
+        priority: claim.priority,
+        form_data: {
+          ...claim.formData,
+          caseSource: claim.caseSource || 'Internal User',
+          policyNumber: claim.policyNumber,
+          product: claim.product,
+        },
       });
-      const newClaim = res.data;
+      const newClaim: Claim = {
+        ...claim,
+        id: res.data?.id ?? finalId,
+        patientId,
+        hospitalId: resolvedHospitalId,
+      };
 
       // Ensure absolutely no duplicate claims in frontend state
       setClaims(prev => [
