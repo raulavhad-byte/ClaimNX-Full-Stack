@@ -27,8 +27,11 @@ export class ClaimsService {
       actorUserId,
     );
     const [productReferenceId, claimTypeReferenceId, lifecycleReferenceId] = await Promise.all([
-      this.requireReferenceValue('CLAIM_PRODUCT', 'CPC'),
-      this.requireReferenceValue('CLAIM_TYPE', 'CASHLESS'),
+      // Master data in earlier environments uses ICA for the cashless CPC
+      // workflow and CASHLESS_PREAUTH for its claim type. Accept both the
+      // current and legacy codes, in priority order.
+      this.requireReferenceValue('CLAIM_PRODUCT', ['CPC', 'ICA', 'CASHLESS']),
+      this.requireReferenceValue('CLAIM_TYPE', ['CASHLESS', 'CASHLESS_PREAUTH']),
       this.requireReferenceValue('CLAIM_LIFECYCLE_STATUS', 'DRAFT'),
     ]);
 
@@ -178,22 +181,29 @@ export class ClaimsService {
     return createdHospital;
   }
 
-  private async requireReferenceValue(categoryCode: string, valueCode: string): Promise<string> {
-    const { data, error } = await this.supabase
-      .from('reference_values')
-      .select('id, reference_categories!inner(code)')
-      .eq('code', valueCode)
-      .eq('reference_categories.code', categoryCode)
-      .eq('is_active', true)
-      .eq('is_deleted', false)
-      .is('deleted_at', null)
-      .maybeSingle<{ id: string }>();
+  private async requireReferenceValue(
+    categoryCode: string,
+    valueCodes: string | string[],
+  ): Promise<string> {
+    const candidates = Array.isArray(valueCodes) ? valueCodes : [valueCodes];
+    for (const valueCode of candidates) {
+      const { data, error } = await this.supabase
+        .from('reference_values')
+        .select('id, reference_categories!inner(code)')
+        .eq('code', valueCode)
+        .eq('reference_categories.code', categoryCode)
+        .eq('is_active', true)
+        .eq('is_deleted', false)
+        .is('deleted_at', null)
+        .maybeSingle<{ id: string }>();
 
-    if (error) throw error;
-    if (!data?.id) {
-      throw new NotFoundException(`Required active ${categoryCode} reference value ${valueCode} was not found.`);
+      if (error) throw error;
+      if (data?.id) return data.id;
     }
-    return data.id;
+
+    throw new NotFoundException(
+      `Required active ${categoryCode} reference value (${candidates.join(' or ')}) was not found.`,
+    );
   }
 
   async findAll(filter?: ClaimFilterDto) {
