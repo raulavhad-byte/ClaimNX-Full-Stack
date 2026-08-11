@@ -23,4 +23,18 @@ export class DocumentsRepository extends BaseRepository {
   defaultSortOrder: 'desc',
   });
   }
+
+  // The established documents table predates the generic soft-delete model
+  // and does not contain is_deleted. BaseRepository.findById() adds that
+  // predicate, which breaks secure preview and delete lookups.
+  override async findById(id: string) {
+    const { data, error } = await this.client
+      .from('documents')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  }
 }
