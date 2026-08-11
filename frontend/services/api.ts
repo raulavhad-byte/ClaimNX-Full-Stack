@@ -28,6 +28,27 @@ function getAccessToken(): string | undefined {
   return undefined;
 }
 
+function unwrapApiEnvelope(payload: any): any {
+  if (
+    payload &&
+    typeof payload === 'object' &&
+    !Array.isArray(payload) &&
+    Object.prototype.hasOwnProperty.call(payload, 'data')
+  ) {
+    return payload.data;
+  }
+  return payload;
+}
+
+function collectionFrom(payload: any, fallback: any[]): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (payload && typeof payload === 'object') {
+    if (Array.isArray(payload.data)) return payload.data;
+    if (Array.isArray(payload.items)) return payload.items;
+  }
+  return fallback;
+}
+
 async function request(path: string, init: RequestInit = {}): Promise<any> {
   const headers = new Headers(init.headers);
   const accessToken = getAccessToken();
@@ -68,7 +89,7 @@ async function request(path: string, init: RequestInit = {}): Promise<any> {
     throw new Error(message);
   }
 
-  return responseBody;
+  return unwrapApiEnvelope(responseBody);
 }
 
 function createLegacyResource(basePath: string): LegacyApi {
@@ -137,8 +158,10 @@ const claimsResource = createLegacyResource('/v1/claims');
 export const claimsApi = {
   ...claimsResource,
   getAll: async (hospitalId?: string) => ({
-    data: (await safe(request(`/claims${hospitalId ? `?hospitalId=${encodeURIComponent(hospitalId)}` : ''}`), localArray('claimnx_claims')))
-      || localArray('claimnx_claims'),
+    data: collectionFrom(
+      await safe(request(`/claims${hospitalId ? `?hospitalId=${encodeURIComponent(hospitalId)}` : ''}`), localArray('claimnx_claims')),
+      localArray('claimnx_claims'),
+    ),
   }),
   create: async (claim: any) => {
     const current = localArray('claimnx_claims');
@@ -160,7 +183,12 @@ export const claimsApi = {
 const usersResource = createLegacyResource('/users');
 export const usersApi = {
   ...usersResource,
-  getAll: async () => ({ data: (await safe(request('/users'), localArray('claimnx_hospital_users'))) || localArray('claimnx_hospital_users') }),
+  getAll: async () => ({
+    data: collectionFrom(
+      await safe(request('/users'), localArray('claimnx_hospital_users')),
+      localArray('claimnx_hospital_users'),
+    ),
+  }),
   create: async (user: any) => { const all = [...localArray('claimnx_hospital_users'), user]; saveLocal('claimnx_hospital_users', all); return { data: user }; },
   update: async (id: string, user: any) => { const all = localArray('claimnx_hospital_users').map((item) => item.id === id ? { ...item, ...user } : item); saveLocal('claimnx_hospital_users', all); return { data: user }; },
   delete: async (id: string) => { saveLocal('claimnx_hospital_users', localArray('claimnx_hospital_users').filter((item) => item.id !== id)); return { data: null }; },
