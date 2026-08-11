@@ -291,6 +291,11 @@ function toUserRequestPayload(user: any, includePassword: boolean): Record<strin
         startDate: credential?.startDate ?? '',
         endDate: credential?.endDate ?? '',
         rateListName: credential?.rateListName ?? '',
+        // Rate lists are non-secret hospital assets.  Keep their content and
+        // MIME type in the persisted profile so the file can be viewed again
+        // after a refresh or a new login. Portal passwords remain excluded.
+        rateListData: credential?.rateListData ?? '',
+        rateListType: credential?.rateListType ?? '',
       }))
       : [],
     hospitalSeal: user?.hospitalSeal ?? '',

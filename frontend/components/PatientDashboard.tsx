@@ -79,6 +79,7 @@ import {
 import { toast } from 'sonner';
 import { formatDate, formatDateTime, safeHtml2Canvas, safeFormatYmd } from '../utils';
 import { clinicalAiService } from '../services/clinicalAiService';
+import { documentsApi } from '../services/api';
 
 interface PatientDashboardProps {
   claims: Claim[];
@@ -458,6 +459,14 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
   const [clinicalInsights, setClinicalInsights] = useState<{ icd10: string[]; summary: string } | null>(null);
   const [showDocsModal, setShowDocsModal] = useState(false);
   const [activeClaimForDocs, setActiveClaimForDocs] = useState<Claim | null>(null);
+  const [storedClaimDocuments, setStoredClaimDocuments] = useState<Array<{
+    documentId: string;
+    claimId: string;
+    name: string;
+    type: string;
+    mimeType: string;
+    uploadedAt?: string;
+  }>>([]);
   const [overrideNextStatus, setOverrideNextStatus] = useState<ClaimStatus | null>(null);
 
   // Transition Dates Modal State
@@ -728,6 +737,74 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
     }
     return latestClaim;
   }, [patientClaims, activeClaimId, latestClaim]);
+
+  // New-admission documents are stored by the backend rather than embedded in
+  // claim JSON. Read that canonical registry for the patient dashboard,
+  // including its document sidebar and timeline.
+  const patientClaimIds = useMemo(
+    () => [...new Set(patientClaims.map((claim) => claim.id).filter(Boolean))].sort().join('|'),
+    [patientClaims],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const claimIds = patientClaimIds ? patientClaimIds.split('|') : [];
+    if (claimIds.length === 0) {
+      setStoredClaimDocuments([]);
+      return () => { cancelled = true; };
+    }
+
+    Promise.all(claimIds.map(async (claimId) => {
+      try {
+        const documents = await documentsApi.listClaimDocuments(claimId);
+        return documents.map((document: any) => ({
+          documentId: String(document.id),
+          claimId,
+          name: document.file_name || 'Claim document',
+          type: document.category || 'Admission document',
+          mimeType: document.mime_type || 'application/pdf',
+          uploadedAt: document.uploaded_at || document.created_at,
+        }));
+      } catch (error) {
+        console.warn(`Unable to load documents for claim ${claimId}`, error);
+        return [];
+      }
+    })).then((result) => {
+      if (!cancelled) setStoredClaimDocuments(result.flat());
+    });
+
+    return () => { cancelled = true; };
+  }, [patientClaimIds]);
+
+  const getClaimDocuments = (claim: Claim) => {
+    const legacyDocuments = [
+      ...(claim.history || []).flatMap((historyItem) => [
+        ...(historyItem.stageData?.documents || []),
+        ...(historyItem.fileData ? [{
+          name: historyItem.fileName || 'Stage document',
+          data: historyItem.fileData,
+          type: 'Stage document',
+        }] : []),
+      ]),
+      ...((claim.formData?.attachedDocs || []).map((document: any) => ({
+        name: document.name,
+        data: document.data,
+        type: document.type || 'Admission document',
+        mimeType: document.mimeType,
+      }))),
+    ];
+    const persistedDocuments = storedClaimDocuments.filter((document) => document.claimId === claim.id);
+    const seen = new Set<string>();
+    return [...legacyDocuments, ...persistedDocuments].filter((document: any) => {
+      if (!document.name) return false;
+      // A legacy cache entry and the canonical stored record can describe the
+      // same upload. Keep one visible entry instead of showing it twice.
+      const key = `${document.name}:${document.type || ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
 
   const activeTemplateName = useMemo(() => {
     if (!activeClaim || !activeClaim.formData) return "Generic IRDAI (Dashed)";
@@ -1097,6 +1174,12 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
     else if (nameLower.endsWith(".pdf")) resolvedMime = "application/pdf";
 
     let finalUrl = data;
+    // The document service returns a short-lived signed Storage URL. It is
+    // already browser-readable and must not be treated as base64 data.
+    if (data.startsWith('http://') || data.startsWith('https://') || data.startsWith('blob:')) {
+      setPreviewFile({ name, data, type: resolvedMime });
+      return;
+    }
     if (resolvedMime === 'application/pdf' || nameLower.endsWith('.pdf')) {
       finalUrl = createBlobUrl(data, 'application/pdf');
     } else if (resolvedMime.startsWith('image/')) {
@@ -1110,11 +1193,31 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
 
   const handleDownload = (name: string, data: string, type: string) => {
     const link = document.createElement('a');
-    link.href = `data:${type};base64,${data}`;
+    link.href = data.startsWith('http://') || data.startsWith('https://') || data.startsWith('blob:')
+      ? data
+      : `data:${type};base64,${data}`;
     link.download = name;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const openClaimDocument = async (document: any) => {
+    try {
+      if (document.documentId) {
+        const preview = await documentsApi.previewClaimDocument(document.documentId);
+        handlePreview(
+          preview.file_name || document.name,
+          preview.preview_url,
+          preview.mime_type || document.mimeType || 'application/pdf',
+        );
+        return;
+      }
+      if (document.data) handlePreview(document.name, document.data, document.mimeType || document.type);
+    } catch (error) {
+      console.error('Unable to preview claim document', error);
+      toast.error('Unable to open this document preview');
+    }
   };
 
   const stats = useMemo(() => {
@@ -1949,6 +2052,27 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
                       </div>
                       {expandedTimelines[claim.id] && (
                         <div className="mt-4 space-y-6 relative before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-px before:bg-slate-200 animate-in fade-in slide-in-from-top-2 duration-200">
+                          {getClaimDocuments(claim).length > 0 && (
+                            <div className="relative pl-8">
+                              <div className="absolute left-0 top-1 w-6 h-6 rounded-full border-4 border-white shadow-sm flex items-center justify-center z-10 bg-indigo-600">
+                                <Paperclip size={10} className="text-white" />
+                              </div>
+                              <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
+                                <p className="text-[9px] font-black text-indigo-700 uppercase tracking-widest mb-2">Admission documents</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {getClaimDocuments(claim).map((document: any, documentIndex: number) => (
+                                    <button
+                                      key={`${document.documentId || document.name}-${documentIndex}`}
+                                      onClick={() => openClaimDocument(document)}
+                                      className="flex items-center gap-1.5 bg-[#000080] text-white px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest hover:bg-blue-900 transition-all shadow-sm"
+                                    >
+                                      <Eye size={11} /> {document.name}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          )}
                           {claim.history
                             .filter(event => {
                               const isProductAllowed = !(claim.product === Product.RECOVERY_RECONCILIATION && (event.status === ClaimStatus.SETTLED || event.status === ClaimStatus.COMPLETE_SETTLEMENT));
@@ -2261,11 +2385,11 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
                                 </div>
                               </div>
                               {/* Documents for this event */}
-                              {event.stageData?.documents && event.stageData.documents.length > 0 && (
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                  {event.stageData.documents.map((doc: any, dIdx: number) => (
-                                    <button key={dIdx} 
-                                      onClick={() => handlePreview(doc.name, doc.data, doc.mimeType || doc.type)}
+                                  {event.stageData?.documents && event.stageData.documents.length > 0 && (
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                      {event.stageData.documents.map((doc: any, dIdx: number) => (
+                                        <button key={dIdx} 
+                                      onClick={() => openClaimDocument(doc)}
                                       className="flex items-center gap-1.5 bg-[#000080] text-white px-3.5 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-blue-900 transition-all cursor-pointer shadow-sm">
                                       <Eye size={12} className="shrink-0" />
                                       <span>{event.stageData.documents.length > 1 ? `VIEW (${dIdx + 1})` : "VIEW"}</span>
@@ -2521,33 +2645,7 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
             </h3>
             <div className="space-y-1">
               {(() => {
-                const allDocsRaw = patientClaims.flatMap(c => {
-                  const historyDocs = (c.history || []).flatMap(h => {
-                    const stageDocs = h.stageData?.documents || [];
-                    const singleDoc = h.fileData ? [{ name: h.fileName, data: h.fileData, type: 'Stage Document' }] : [];
-                    return [...stageDocs, ...singleDoc];
-                  });
-                  
-                  // Include initial attached docs from claim creation
-                  const initialDocs = (c.formData?.attachedDocs || []).map((doc: any) => ({
-                    name: doc.name,
-                    data: doc.data,
-                    type: doc.type || 'Initial Document',
-                    mimeType: doc.mimeType
-                  }));
-
-                  return [...historyDocs, ...initialDocs];
-                });
-                
-                // Deduplicate by name and type or data identifier
-                const seen = new Set<string>();
-                const allDocs = allDocsRaw.filter(doc => {
-                  if (!doc.name) return false;
-                  const key = `${doc.name}-${doc.type || 'unknown'}`;
-                  if (seen.has(key)) return false;
-                  seen.add(key);
-                  return true;
-                });
+                const allDocs = patientClaims.flatMap((claim) => getClaimDocuments(claim));
                 
                 if (allDocs.length === 0) {
                   return (
@@ -2574,9 +2672,9 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
                       </div>
                     </div>
                     <button 
-                      onClick={() => doc.data && handlePreview(doc.name, doc.data, (doc as any).mimeType || doc.type)}
+                      onClick={() => openClaimDocument(doc)}
                       className="p-1 text-slate-300 hover:text-indigo-500 transition-colors disabled:opacity-30"
-                      disabled={!doc.data}
+                      disabled={!doc.data && !doc.documentId}
                     >
                       <Eye size={12} />
                     </button>
@@ -2807,7 +2905,7 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
             <div className="p-6 max-h-[70vh] overflow-y-auto no-scrollbar">
                <div className="space-y-3">
                  {(() => {
-                   const claimDocs = (activeClaimForDocs.history || []).flatMap(h => h.stageData?.documents || []);
+                   const claimDocs = getClaimDocuments(activeClaimForDocs);
                    if (claimDocs.length === 0) {
                      return (
                        <div className="py-12 text-center">
@@ -2833,16 +2931,28 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
                          </div>
                        </div>
                        <div className="flex items-center gap-2">
-                         {doc.data && (
+                         {(doc.data || doc.documentId) && (
                            <>
                              <button 
-                               onClick={() => handlePreview(doc.name, doc.data, doc.type)}
+                               onClick={() => openClaimDocument(doc)}
                                className="p-2 text-slate-300 hover:text-indigo-500 transition-colors"
                              >
                                <Eye size={18} />
                              </button>
                              <button 
-                               onClick={() => handleDownload(doc.name, doc.data, doc.type)}
+                               onClick={async () => {
+                                 if (doc.documentId) {
+                                   try {
+                                     const preview = await documentsApi.previewClaimDocument(doc.documentId);
+                                     handleDownload(preview.file_name || doc.name, preview.preview_url, preview.mime_type || doc.mimeType || doc.type);
+                                   } catch (error) {
+                                     console.error('Unable to download claim document', error);
+                                     toast.error('Unable to download this document');
+                                   }
+                                   return;
+                                 }
+                                 handleDownload(doc.name, doc.data, doc.mimeType || doc.type);
+                               }}
                                className="p-2 text-slate-300 hover:text-indigo-500 transition-colors"
                              >
                                <Download size={18} />
