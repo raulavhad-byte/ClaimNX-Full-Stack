@@ -463,9 +463,17 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
   };
 
   if (selectedClaim) {
+    const selectedHospitalName = visibleHospitals.find(
+      hospital => hospital.id === (selectedClaim.hospitalId || selectedClaim.formData?.hospitalId)
+    )?.displayName
+      || selectedClaim.formData?.hosp_name
+      || selectedClaim.formData?.hospital_name
+      || 'Hospital name unavailable';
+
     return <MedicalReviewScreen 
       claim={selectedClaim} 
       currentUser={currentUser} 
+      hospitalName={selectedHospitalName}
       onBack={() => {
         setSelectedClaim(null);
       }} 
@@ -935,7 +943,7 @@ function KpiCard({ title, value, count, icon: Icon, color, onClick, active }: { 
 
 // --- Medical Review Screen ---
 
-function MedicalReviewScreen({ claim, currentUser, onBack, onUpdateClaim }: { claim: Claim, currentUser: HospitalUser, onBack: () => void, onUpdateClaim: (claim: Claim) => void }) {
+function MedicalReviewScreen({ claim, currentUser, hospitalName, onBack, onUpdateClaim }: { claim: Claim, currentUser: HospitalUser, hospitalName: string, onBack: () => void, onUpdateClaim: (claim: Claim) => void }) {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'clinical' | 'documents' | 'timeline'>('clinical');
   const [decision, setDecision] = useState<'approve' | 'query' | 'reject' | null>(null);
@@ -1282,11 +1290,11 @@ function MedicalReviewScreen({ claim, currentUser, onBack, onUpdateClaim }: { cl
             <h2 className="text-xl font-black text-slate-900 flex items-center gap-2">
               <Link to={`/process-claim/${claim.id}?source=medical`} className="hover:text-blue-600 transition-colors">{claim.patientName}</Link> 
               <span className="text-sm font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
-                {claim.id}
+                {claim.formData?.claim_no || claim.formData?.claimNumber || claim.caseReferenceId || 'Claim number pending'}
               </span>
             </h2>
             <p className="text-sm text-slate-500 font-medium mt-0.5">
-              {claim.formData?.hospitalId || 'Unknown Hospital'} • {claim.diagnosis}
+              {hospitalName} • {claim.insuranceProvider || 'Insurer unavailable'} • {claim.diagnosis}
             </p>
           </div>
         </div>
