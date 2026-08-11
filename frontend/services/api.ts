@@ -197,6 +197,38 @@ function claimRequestPayload(claim: any): Record<string, unknown> {
   return withoutInlineClaimFiles(claim) as Record<string, unknown>;
 }
 
+function claimUpdatePayload(claim: any): Record<string, unknown> {
+  const formData = claim?.formData ?? claim?.form_data ?? {};
+  const workflowState = {
+    originatingStatus: claim?.originatingStatus,
+    assignedMedicalUserId: claim?.assignedMedicalUserId,
+    assignedMedicalUserName: claim?.assignedMedicalUserName,
+    isAccepted: claim?.isAccepted,
+    isMedicallyApproved: claim?.isMedicallyApproved,
+    submissionStatus: claim?.submissionStatus,
+    failureType: claim?.failureType,
+    queryRaisedBy: claim?.queryRaisedBy,
+    history: Array.isArray(claim?.history) ? claim.history : formData.history ?? [],
+  };
+
+  const payload: Record<string, unknown> = {
+    status: claim?.status,
+    amount: Number(claim?.amount ?? claim?.estimatedCost ?? 0),
+    estimated_cost: Number(claim?.estimatedCost ?? claim?.estimated_cost ?? 0),
+    approved_amount: claim?.approvedAmount ?? claim?.approved_amount,
+    settled_amount: claim?.settledAmount ?? claim?.settled_amount,
+    diagnosis: claim?.diagnosis,
+    admission_date: claim?.admissionDate ?? claim?.admission_date,
+    discharge_date: claim?.dischargeDate ?? claim?.discharge_date,
+    priority: claim?.priority,
+    form_data: withoutInlineClaimFiles({ ...formData, ...workflowState }),
+  };
+
+  return Object.fromEntries(
+    Object.entries(payload).filter(([, value]) => value !== undefined),
+  );
+}
+
 function toPortalUser(user: any): any {
   const profileData = user?.profileData ?? user?.profile_data ?? {};
   const nameParts = String(user?.displayName ?? user?.display_name ?? '').trim().split(/\s+/);
@@ -399,12 +431,24 @@ function toPortalClaim(claim: any): any {
     claimType: claim?.claimType ?? formData?.claimType ?? 'Cashless',
     product,
     status: databaseClaimStatusMap[status] ?? claim?.status ?? 'Draft',
+    originatingStatus: claim?.originatingStatus ?? formData?.originatingStatus,
+    assignedMedicalUserId: claim?.assignedMedicalUserId ?? formData?.assignedMedicalUserId,
+    assignedMedicalUserName: claim?.assignedMedicalUserName ?? formData?.assignedMedicalUserName,
+    isAccepted: Boolean(claim?.isAccepted ?? formData?.isAccepted),
+    isMedicallyApproved: Boolean(claim?.isMedicallyApproved ?? formData?.isMedicallyApproved),
+    submissionStatus: claim?.submissionStatus ?? formData?.submissionStatus,
+    failureType: claim?.failureType ?? formData?.failureType,
+    queryRaisedBy: claim?.queryRaisedBy ?? formData?.queryRaisedBy,
     formData: {
       ...formData,
       hospitalId: claim?.hospital_id ?? formData?.hospitalId ?? '',
       product,
     },
-    history: Array.isArray(claim?.history) ? claim.history : [],
+    history: Array.isArray(claim?.history)
+      ? claim.history
+      : Array.isArray(formData?.history)
+        ? formData.history
+        : [],
   };
 }
 
@@ -439,7 +483,17 @@ export const claimsApi = {
   update: async (id: string, claim: any) => {
     const updated = localArray('claimnx_claims').map((item) => item.id === id ? claim : item);
     saveLocal('claimnx_claims', updated);
-    return { data: (await safe(request(`/claims/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(claimRequestPayload(claim)) }), claim)) || claim };
+    return {
+      data: toPortalClaim(
+        (await safe(
+          request(`/claims/${encodeURIComponent(id)}`, {
+            method: 'PATCH',
+            body: JSON.stringify(claimUpdatePayload(claim)),
+          }),
+          claim,
+        )) || claim,
+      ),
+    };
   },
   delete: async (id: string) => {
     saveLocal('claimnx_claims', localArray('claimnx_claims').filter((item) => item.id !== id));
