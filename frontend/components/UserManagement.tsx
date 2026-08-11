@@ -897,6 +897,8 @@ const UserManagement: React.FC<UserManagementProps> = ({
 
     const createdId =
       editingUserId || `USR-${Math.random().toString(36).substr(2, 9)}`;
+    const selectedRoleName = isRahul ? "Super Admin" : formState.role;
+    const selectedRole = roles.find((role) => role.name === selectedRoleName);
     const userPayload: HospitalUser = {
       id: createdId,
       username: formState.loginId,
@@ -909,7 +911,8 @@ const UserManagement: React.FC<UserManagementProps> = ({
           : effectiveMode === "hospital_staff"
             ? formState.tpaPersonName
             : formState.hospitalName || "New Hospital",
-      role: isRahul ? "Super Admin" : formState.role,
+      role: selectedRoleName,
+      roleId: selectedRole?.id,
       status: formState.status,
       statusReason: formState.statusReason,
       createdAt: existingUser?.createdAt || new Date().toISOString(),
