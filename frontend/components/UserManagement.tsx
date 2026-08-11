@@ -1037,7 +1037,10 @@ const UserManagement: React.FC<UserManagementProps> = ({
       success: editingUserId
         ? "Successfully updated!"
         : "Successfully created!",
-      error: "Unable to save profile.",
+      error: (error) =>
+        error instanceof Error && error.message
+          ? `Unable to save profile: ${error.message}`
+          : "Unable to save profile.",
     });
   };
 
