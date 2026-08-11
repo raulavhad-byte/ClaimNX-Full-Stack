@@ -492,7 +492,46 @@ await this.auditService.log({
  * Current Logged-in User
  */
 async me(req: any) {
-  return req.user;
+  const userId = req?.user?.sub ?? req?.user?.id;
+  if (!userId) {
+    throw new UnauthorizedException('Invalid session.');
+  }
+
+  // The JWT deliberately contains only identity/session fields. Load the
+  // current application profile here so product and geographic assignments
+  // changed by an administrator take effect on the user's next page load.
+  const { data: user, error: userError } = await this.databaseService
+    .getClient()
+    .from('users')
+    .select('id, email, display_name, role, role_id, hospital_id, mobile_no, entity_type, profile_data, status, is_deleted')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (userError || !user || user.is_deleted || user.status !== 'Active') {
+    throw new UnauthorizedException('Session has been revoked.');
+  }
+
+  let permissions: string[] = [];
+  const roleName = String(user.role ?? '').trim().toUpperCase();
+  if (['SUPER ADMIN', 'ADMIN', 'PRIMARY ADMIN'].includes(roleName)) {
+    permissions = ['all'];
+  } else if (user.role_id) {
+    const { data: role } = await this.databaseService
+      .getClient()
+      .from('roles')
+      .select('permissions')
+      .eq('id', user.role_id)
+      .maybeSingle();
+    permissions = Array.isArray(role?.permissions) ? role.permissions : [];
+  }
+
+  return {
+    ...user,
+    profileData: user.profile_data ?? {},
+    hospitalId: user.hospital_id ?? null,
+    roleId: user.role_id ?? null,
+    permissions,
+  };
 }
 
 /**

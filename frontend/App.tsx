@@ -1237,13 +1237,16 @@ const AppContent: React.FC = () => {
           const authenticatedUser = await authApi.getMe();
           setHospitalProfile((current) => ({
             ...current,
+            ...(authenticatedUser?.profileData ?? authenticatedUser?.profile_data ?? {}),
             id: authenticatedUser?.id ?? current.id,
             username: authenticatedUser?.email ?? current.username,
             emailId: authenticatedUser?.email ?? current.emailId,
-            displayName: authenticatedUser?.displayName ?? current.displayName,
+            displayName: authenticatedUser?.displayName ?? authenticatedUser?.display_name ?? current.displayName,
             role: authenticatedUser?.role ?? current.role,
             roleId: authenticatedUser?.roleId ?? current.roleId,
             hospitalId: authenticatedUser?.hospitalId ?? current.hospitalId,
+            mobileNo: authenticatedUser?.mobileNo ?? authenticatedUser?.mobile_no ?? current.mobileNo,
+            entityType: authenticatedUser?.entityType ?? authenticatedUser?.entity_type ?? current.entityType,
             permissions: Array.isArray(authenticatedUser?.permissions)
               ? authenticatedUser.permissions
               : [],
@@ -1264,8 +1267,15 @@ const AppContent: React.FC = () => {
             'PRIMARY ADMIN',
           ].includes(sessionRole);
 
+          const isCentralOperationsUser = sessionRole === 'SUPER ADMIN' ||
+            sessionRole === 'ADMIN' ||
+            sessionRole === 'PRIMARY ADMIN' ||
+            !sessionRole.startsWith('HOSPITAL');
           const [claimsRes, fieldsRes] = await Promise.all([
-            claimsApi.getAll((hospitalProfile.role?.toUpperCase() === 'SUPER ADMIN' || hospitalProfile.role?.toUpperCase() === 'ADMIN') ? undefined : getScopeId(hospitalProfile)),
+            // Operational users (Medical, CRM, KYP, Finance) need the claim
+            // pool before their product/location assignment can be applied.
+            // Hospital accounts remain strictly scoped to their own hospital.
+            claimsApi.getAll(isCentralOperationsUser ? undefined : getScopeId(hospitalProfile)),
             configApi.getFields()
           ]);
           setClaims(claimsRes.data);
@@ -1666,7 +1676,13 @@ const AppContent: React.FC = () => {
     } else if (roleUpper && !roleUpper.startsWith('HOSPITAL') && hospitalProfile.role !== 'Hospital') {
         // Central roles (Admin, Medical Team, Policy Audit Team, CRM Team, Operations, Sales, Reconciliation, etc.)
         const allowedHospitalIds = visibleHospitals.map(h => h.id);
-        baseFiltered = claims.filter(c => allowedHospitalIds.includes(c.formData?.hospitalId || c.hospitalId || ''));
+        // Normal operational users may not have users.view permission, so the
+        // hospital directory is intentionally unavailable to their browser.
+        // Keep the pool here and enforce their product/location boundaries
+        // below from the claim's persisted hospital snapshot.
+        baseFiltered = allowedHospitalIds.length > 0
+          ? claims.filter(c => allowedHospitalIds.includes(c.formData?.hospitalId || c.hospitalId || ''))
+          : claims;
     } else {
       const myScopeId = getScopeId(hospitalProfile);
       baseFiltered = claims.filter(c => {
@@ -1705,7 +1721,6 @@ const AppContent: React.FC = () => {
         if (hasLocationFilter) {
           const claimHospId = c.formData?.hospitalId || c.hospitalId || '';
           const hosp = hospitalUsers.find(u => u.id === claimHospId);
-          
           const claimZone = hosp?.zone || c.formData?.hosp_zone || '';
           const claimState = hosp?.state || c.formData?.hosp_state || c.formData?.p_state || '';
           const claimDistrict = hosp?.district || c.formData?.hosp_district || c.formData?.p_district || '';
@@ -2380,6 +2395,12 @@ const AppContent: React.FC = () => {
           caseSource: claim.caseSource || 'Internal User',
           policyNumber: claim.policyNumber,
           product: claim.product,
+          // Persist a hospital location snapshot with every claim. This lets
+          // role-based queues enforce Zone/State/District assignments without
+          // exposing the full hospital directory to operational users.
+          hosp_zone: claim.formData?.hosp_zone ?? hospitalProfile.zone ?? '',
+          hosp_state: claim.formData?.hosp_state ?? hospitalProfile.state ?? '',
+          hosp_district: claim.formData?.hosp_district ?? hospitalProfile.district ?? '',
         },
       });
       const persistedHospitalId = isUuid(res.data?.hospital_id)
@@ -2521,9 +2542,12 @@ const AppContent: React.FC = () => {
     hospitalProfile.role?.toUpperCase() === 'SUPER ADMIN'
   );
 
-  const isLiveClaimsTrackerAllowed = 
-    hospitalProfile.valueAddedServices?.liveClaimsTrackerEnabled === true || 
-    hospitalProfile.role?.toUpperCase() === 'SUPER ADMIN';
+  const isLiveClaimsTrackerAllowed =
+    hospitalProfile.role?.toUpperCase() === 'SUPER ADMIN' ||
+    (
+      canAccess('value_added_service') &&
+      hospitalProfile.valueAddedServices?.liveClaimsTrackerEnabled === true
+    );
 
   return (
     <ErrorBoundary>

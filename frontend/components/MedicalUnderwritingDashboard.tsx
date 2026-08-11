@@ -102,11 +102,14 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
         filtered = filtered.filter(c => {
           const hospId = c.hospitalId || c.formData?.hospitalId;
           const hosp = users.find(h => h.id === hospId) || visibleHospitals.find(h => h.id === hospId);
-          if (!hosp) return false;
-
-          const zoneMatch = userZones.length === 0 || (hosp.zone && userZones.includes(hosp.zone));
-          const stateMatch = userStates.length === 0 || (hosp.state && userStates.includes(hosp.state));
-          const districtMatch = userDistricts.length === 0 || (hosp.district && userDistricts.includes(hosp.district));
+          // Claim location is a database snapshot, so an officer's queue can
+          // be filtered even when users.view is intentionally unavailable.
+          const claimZone = hosp?.zone || c.formData?.hosp_zone || '';
+          const claimState = hosp?.state || c.formData?.hosp_state || c.formData?.p_state || '';
+          const claimDistrict = hosp?.district || c.formData?.hosp_district || c.formData?.p_district || '';
+          const zoneMatch = userZones.length === 0 || userZones.includes(claimZone);
+          const stateMatch = userStates.length === 0 || userStates.includes(claimState);
+          const districtMatch = userDistricts.length === 0 || userDistricts.includes(claimDistrict);
 
           return zoneMatch && stateMatch && districtMatch;
         });
