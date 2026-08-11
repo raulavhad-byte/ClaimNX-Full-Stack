@@ -402,6 +402,7 @@ await this.auditService.log({
       createUserDto;
 
     const roleId = requestedRoleId ?? await this.resolveRoleId(role);
+    const resolvedHospitalId = await this.resolveHospitalId(hospitalId);
 
     const { data: authData, error: authError } =
       await client.auth.admin.createUser({
@@ -425,7 +426,7 @@ await this.auditService.log({
         display_name: displayName,
         role: role ?? 'Hospital',
         role_id: roleId ?? null,
-        hospital_id: hospitalId ?? null,
+        hospital_id: resolvedHospitalId,
         mobile_no: mobileNo ?? null,
         entity_type: entityType ?? 'User',
         profile_data: profileData ?? {},
@@ -470,6 +471,20 @@ await this.auditService.log({
       throw new BadRequestException(`Active role "${roleName}" was not found.`);
     }
 
+    return String(data.id);
+  }
+
+  private async resolveHospitalId(hospitalId?: string): Promise<string | null> {
+    if (!hospitalId) return null;
+
+    const { data, error } = await this.databaseService
+      .getClient()
+      .from('hospitals')
+      .select('id')
+      .eq('id', hospitalId)
+      .maybeSingle();
+
+    if (error || !data?.id) return null;
     return String(data.id);
   }
 

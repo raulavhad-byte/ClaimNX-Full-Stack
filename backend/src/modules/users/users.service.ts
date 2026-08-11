@@ -67,7 +67,12 @@ export class UsersService {
     } else if (dto.role !== undefined) {
       payload.role_id = await this.resolveRoleId(dto.role);
     }
-    if (dto.hospitalId !== undefined) payload.hospital_id = dto.hospitalId;
+    if (dto.hospitalId !== undefined) {
+      const hospitalId = await this.resolveHospitalId(dto.hospitalId);
+      // Legacy UI flows can supply another user UUID as a hospital ID. Do
+      // not overwrite an existing valid association with that invalid value.
+      if (hospitalId) payload.hospital_id = hospitalId;
+    }
     if (dto.mobileNo !== undefined) payload.mobile_no = dto.mobileNo;
     if (dto.entityType !== undefined) payload.entity_type = dto.entityType;
     if (dto.profileData !== undefined) payload.profile_data = dto.profileData;
@@ -99,6 +104,18 @@ export class UsersService {
       throw new NotFoundException(`Active role "${roleName}" was not found.`);
     }
 
+    return String(data.id);
+  }
+
+  private async resolveHospitalId(hospitalId: string): Promise<string | null> {
+    const { data, error } = await this.databaseService
+      .getClient()
+      .from('hospitals')
+      .select('id')
+      .eq('id', hospitalId)
+      .maybeSingle();
+
+    if (error || !data?.id) return null;
     return String(data.id);
   }
 }
