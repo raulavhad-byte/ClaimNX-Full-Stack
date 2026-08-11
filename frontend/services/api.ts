@@ -230,6 +230,36 @@ function toInsuranceRequestPayload(entity: any): Record<string, unknown> {
   };
 }
 
+function toPortalRole(role: any): any {
+  return {
+    ...role,
+    id: String(role?.id ?? ''),
+    name: role?.name ?? '',
+    description: role?.description ?? '',
+    permissions: Array.isArray(role?.permissions) ? role.permissions : [],
+    canCreateRoles: Array.isArray(role?.canCreateRoles)
+      ? role.canCreateRoles
+      : Array.isArray(role?.can_create_roles)
+        ? role.can_create_roles
+        : [],
+    products: Array.isArray(role?.products) ? role.products : [],
+    allowedReports: Array.isArray(role?.allowedReports) ? role.allowedReports : [],
+    users: Number(role?.users ?? 0),
+    status: role?.status === 'Inactive' ? 'Inactive' : 'Active',
+  };
+}
+
+function toRoleRequestPayload(role: any): Record<string, unknown> {
+  return {
+    id: String(role?.id ?? ''),
+    name: String(role?.name ?? '').trim(),
+    description: String(role?.description ?? ''),
+    permissions: Array.isArray(role?.permissions) ? role.permissions : [],
+    canCreateRoles: Array.isArray(role?.canCreateRoles) ? role.canCreateRoles : [],
+    status: role?.status === 'Inactive' ? 'Inactive' : 'Active',
+  };
+}
+
 async function safe<T>(remote: Promise<T>, fallback: T): Promise<T> {
   try { return await remote; } catch (error) {
     if (strictApiMode) throw error;
@@ -312,11 +342,26 @@ export const configApi = {
   getInsurers: async () => ({
     data: collectionFrom(await request('/insurance'), []).map(toPortalInsuranceEntity),
   }),
-  getRoles: async () => ({ data: localArray('claimnx_roles') }),
+  getRoles: async () => ({
+    data: collectionFrom(await request('/roles?limit=100'), []).map(toPortalRole),
+  }),
   getFields: async () => ({ data: localArray('claimnx_fields') }),
-  addRole: async (role: any) => { const all = [...localArray('claimnx_roles'), role]; saveLocal('claimnx_roles', all); return { data: role }; },
-  updateRole: async (id: string, role: any) => { saveLocal('claimnx_roles', localArray('claimnx_roles').map((item) => item.id === id ? role : item)); return { data: role }; },
-  deleteRole: async (id: string) => { saveLocal('claimnx_roles', localArray('claimnx_roles').filter((item) => item.id !== id)); return { data: null }; },
+  addRole: async (role: any) => ({
+    data: toPortalRole(await request('/roles', {
+      method: 'POST',
+      body: JSON.stringify(toRoleRequestPayload(role)),
+    })),
+  }),
+  updateRole: async (id: string, role: any) => ({
+    data: toPortalRole(await request(`/roles/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(toRoleRequestPayload(role)),
+    })),
+  }),
+  deleteRole: async (id: string) => {
+    await request(`/roles/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return { data: null };
+  },
   createInsurer: async (insurer: any) => {
     const created = toPortalInsuranceEntity(await request('/insurance', {
       method: 'POST',

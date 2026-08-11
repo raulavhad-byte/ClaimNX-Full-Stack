@@ -1184,38 +1184,9 @@ const AppContent: React.FC = () => {
   const [insurers, setInsurers] = useState<InsuranceEntity[]>([]);
   const [tpas, setTpas] = useState<InsuranceEntity[]>([]);
   const [fields, setFields] = useState<FormField[]>([]);
-  const [roles, setRoles] = useState<Role[]>(() => {
-    try {
-      const saved = localStorage.getItem('claimnx_roles');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && parsed.length > 0) {
-          const updated = [...parsed];
-          const hasFinance = updated.some((r: any) => String(r.name ?? '').toLowerCase() === 'finance team');
-          if (!hasFinance) {
-            const defaultFinance = INITIAL_ROLES.find(r => r.name.toLowerCase() === 'finance team');
-            if (defaultFinance) {
-              updated.push(defaultFinance);
-            }
-          }
-          const hasPolicyAudit = updated.some((r: any) => {
-            const roleName = String(r.name ?? '').toLowerCase();
-            return roleName === 'policy audit team' || roleName === 'policy audit team role';
-          });
-          if (!hasPolicyAudit) {
-            const defaultPolicyAudit = INITIAL_ROLES.find(r => r.name.toLowerCase() === 'policy audit team' || r.name.toLowerCase() === 'policy audit team role');
-            if (defaultPolicyAudit) {
-              updated.push(defaultPolicyAudit);
-            }
-          }
-          return updated;
-        }
-      }
-    } catch (e) {
-      console.warn("Failed to load roles from local storage on boot", e);
-    }
-    return INITIAL_ROLES;
-  });
+  // Roles are authorization data and must always come from the backend.
+  // Do not restore browser-cached or seeded roles into the directory.
+  const [roles, setRoles] = useState<Role[]>([]);
   const [stages, setStages] = useState<ClaimStage[]>(INITIAL_STAGES);
   const [systemConfig, setSystemConfig] = useState({ 
     autoExtract: true, 
@@ -1276,69 +1247,7 @@ const AppContent: React.FC = () => {
           setClaims(claimsRes.data);
           setHospitalUsers(usersRes.data);
           
-          const fetchedRoles = rolesRes.data;
-          if (fetchedRoles && fetchedRoles.length > 0) {
-            // Ensure Super Admin or Admin role correctly mapped
-            const hasSuperAdmin = fetchedRoles.some((r: any) => r.name === 'Super Admin');
-            if (!hasSuperAdmin) {
-              const adminIdx = fetchedRoles.findIndex((r: any) => r.name === 'Admin');
-              if (adminIdx !== -1) {
-                fetchedRoles[adminIdx].name = 'Super Admin';
-                fetchedRoles[adminIdx].permissions = ['all'];
-              } else {
-                fetchedRoles.unshift(INITIAL_ROLES[0]);
-              }
-            }
-
-            // Restore Policy Audit team and Finance Team roles if missing
-            const updatedFetchedRoles = [...fetchedRoles];
-            
-            const hasFinance = updatedFetchedRoles.some((r: any) => String(r.name ?? '').toLowerCase() === 'finance team');
-            if (!hasFinance) {
-              const defaultFinance = INITIAL_ROLES.find(r => r.name.toLowerCase() === 'finance team');
-              if (defaultFinance) {
-                updatedFetchedRoles.push(defaultFinance);
-                configApi.addRole(defaultFinance).catch(err => console.error("Failed to restore Finance Team role in DB", err));
-              }
-            }
-
-            const hasPolicyAudit = updatedFetchedRoles.some((r: any) => {
-              const roleName = String(r.name ?? '').toLowerCase();
-              return roleName === 'policy audit team' || roleName === 'policy audit team role';
-            });
-            if (!hasPolicyAudit) {
-              const defaultPolicyAudit = INITIAL_ROLES.find(r => r.name.toLowerCase() === 'policy audit team' || r.name.toLowerCase() === 'policy audit team role');
-              if (defaultPolicyAudit) {
-                updatedFetchedRoles.push(defaultPolicyAudit);
-                configApi.addRole(defaultPolicyAudit).catch(err => console.error("Failed to restore Policy Audit Team role in DB", err));
-              }
-            }
-
-            setRoles(updatedFetchedRoles);
-          } else {
-            // If DB/backend returned empty list or failed, load/merge state from localStorage/INITIAL_ROLES
-            const currentRoles = [...roles];
-            const hasFinance = currentRoles.some((r: any) => String(r.name ?? '').toLowerCase() === 'finance team');
-            if (!hasFinance) {
-              const defaultFinance = INITIAL_ROLES.find(r => r.name.toLowerCase() === 'finance team');
-              if (defaultFinance) {
-                currentRoles.push(defaultFinance);
-                configApi.addRole(defaultFinance).catch(err => console.error("Failed to default-init Finance Team role", err));
-              }
-            }
-            const hasPolicyAudit = currentRoles.some((r: any) => {
-              const roleName = String(r.name ?? '').toLowerCase();
-              return roleName === 'policy audit team' || roleName === 'policy audit team role';
-            });
-            if (!hasPolicyAudit) {
-              const defaultPolicyAudit = INITIAL_ROLES.find(r => r.name.toLowerCase() === 'policy audit team' || r.name.toLowerCase() === 'policy audit team role');
-              if (defaultPolicyAudit) {
-                currentRoles.push(defaultPolicyAudit);
-                configApi.addRole(defaultPolicyAudit).catch(err => console.error("Failed to default-init Policy Audit Team role", err));
-              }
-            }
-            setRoles(currentRoles.length > 0 ? currentRoles : INITIAL_ROLES);
-          }
+          setRoles(rolesRes.data);
           
           setFields(fieldsRes.data);
 
