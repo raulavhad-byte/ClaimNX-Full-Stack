@@ -1,4 +1,14 @@
 {
+  "name": "claimnx-full-stack",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix backend run start:dev",
+    "build": "npm --prefix frontend run build && npm --prefix backend run build",
+    "build:frontend": "npm --prefix frontend run build",
+    "build:backend": "npm --prefix backend run build"
+  },
   "dependencies": {
     "@nestjs/config": "^4.0.4",
     "@nestjs/jwt": "^11.0.2",
