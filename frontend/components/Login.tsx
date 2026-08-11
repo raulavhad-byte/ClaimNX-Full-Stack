@@ -86,8 +86,12 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       return;
     } catch (backendAuthError: any) {
       // Legacy browser-only authentication is retained solely for local Vite
-      // development while the remaining portal screens are migrated.
-      if (!import.meta.env.DEV || !DISABLE_FIRESTORE) {
+      // development when explicitly opted in. Strict API testing must never
+      // turn an invalid backend login into a cached local admin session.
+      const strictApiMode = import.meta.env.VITE_CLAIMNX_STRICT_API === 'true';
+      if (strictApiMode || !import.meta.env.DEV || !DISABLE_FIRESTORE) {
+        claimnxSessionService.clear();
+        localStorage.removeItem('claimnx_manual_auth');
         setError(backendAuthError?.message || 'Unable to sign in. Please verify your credentials.');
         return;
       }
