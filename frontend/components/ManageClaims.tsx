@@ -139,9 +139,10 @@ const ManageClaims: React.FC<ManageClaimsProps> = ({
     const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
 
     const filtered = filteredClaimsByProduct.filter(c => {
-      const matchesSearch = c.patientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                           c.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                           (c.formData?.insurer_claim_no || '').toLowerCase().includes(searchTerm.toLowerCase());
+      const normalizedSearchTerm = searchTerm.toLowerCase();
+      const matchesSearch = String(c.patientName ?? '').toLowerCase().includes(normalizedSearchTerm) ||
+                           String(c.id ?? '').toLowerCase().includes(normalizedSearchTerm) ||
+                           String(c.formData?.insurer_claim_no ?? '').toLowerCase().includes(normalizedSearchTerm);
       
       if (!matchesSearch) return false;
 
@@ -193,11 +194,12 @@ const ManageClaims: React.FC<ManageClaimsProps> = ({
     return sortedAndFilteredClaims.slice(start, start + itemsPerPage);
   }, [sortedAndFilteredClaims, currentPage]);
 
-  const getStatusStyle = (status: string) => {
-    if (status.includes('Approved')) return 'bg-emerald-50 text-emerald-600 border-emerald-100';
-    if (status.includes('Rejected')) return 'bg-rose-50 text-rose-600 border-rose-100';
-    if (status.includes('Initiated') || status.includes('Pending')) return 'bg-amber-50 text-amber-600 border-amber-100';
-    if (status.includes('Settlement')) return 'bg-indigo-50 text-indigo-600 border-indigo-100';
+  const getStatusStyle = (status?: string) => {
+    const normalizedStatus = status ?? '';
+    if (normalizedStatus.includes('Approved')) return 'bg-emerald-50 text-emerald-600 border-emerald-100';
+    if (normalizedStatus.includes('Rejected')) return 'bg-rose-50 text-rose-600 border-rose-100';
+    if (normalizedStatus.includes('Initiated') || normalizedStatus.includes('Pending')) return 'bg-amber-50 text-amber-600 border-amber-100';
+    if (normalizedStatus.includes('Settlement')) return 'bg-indigo-50 text-indigo-600 border-indigo-100';
     return 'bg-blue-50 text-blue-600 border-blue-100';
   };
 
