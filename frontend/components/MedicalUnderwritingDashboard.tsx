@@ -265,6 +265,79 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
     }
   }, []);
 
+  const performance = useMemo(() => {
+    const officerName = String(currentUser.displayName || currentUser.username || '').trim().toLowerCase();
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(startOfToday);
+    startOfWeek.setDate(startOfWeek.getDate() - ((startOfWeek.getDay() + 6) % 7));
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const decisionEvents = claims.flatMap((claim) =>
+      (claim.history || [])
+        .filter((event) => {
+          const isMedicalDecision = event.type === 'medical_decision';
+          const byCurrentOfficer = claim.assignedMedicalUserId === currentUser.id ||
+            (officerName.length > 0 && String(event.userName || '').trim().toLowerCase() === officerName);
+          return isMedicalDecision && byCurrentOfficer;
+        })
+        .map((event) => ({ claim, event })),
+    );
+
+    const eventDate = (entry: { event: { date: string } }) => new Date(entry.event.date);
+    const since = (start: Date) => decisionEvents.filter((entry) => eventDate(entry) >= start).length;
+    const hasText = (entry: { event: { comment?: string } }, text: string) =>
+      String(entry.event.comment || '').toLowerCase().includes(text);
+    const approved = decisionEvents.filter((entry) =>
+      hasText(entry, 'approved') || [
+        ClaimStatus.PRE_AUTH_APPROVED,
+        ClaimStatus.ENHANCEMENT_APPROVED,
+        ClaimStatus.DISCHARGE_APPROVED,
+        ClaimStatus.MEDICAL_APPROVED,
+      ].includes(entry.event.status as ClaimStatus),
+    ).length;
+    const rejected = decisionEvents.filter((entry) => hasText(entry, 'reject')).length;
+    const queries = decisionEvents.filter((entry) => hasText(entry, 'query')).length;
+    const acceptedToDecisionHours = decisionEvents.flatMap(({ claim, event }) => {
+      const decisionAt = new Date(event.date).getTime();
+      const acceptedAt = (claim.history || [])
+        .filter((history) => history.status === ClaimStatus.PENDING_MEDICAL_TEAM &&
+          String(history.comment || '').toLowerCase().includes('accepted for clinical review'))
+        .map((history) => new Date(history.date).getTime())
+        .filter((date) => Number.isFinite(date) && date <= decisionAt)
+        .sort((a, b) => b - a)[0];
+      return acceptedAt ? [(decisionAt - acceptedAt) / (1000 * 60 * 60)] : [];
+    });
+    const averageTatHours = acceptedToDecisionHours.length
+      ? acceptedToDecisionHours.reduce((sum, hours) => sum + hours, 0) / acceptedToDecisionHours.length
+      : null;
+    const highValueReviews = decisionEvents.filter(({ claim }) => Number(claim.estimatedCost || 0) >= 100000).length;
+    const resolvedQueries = decisionEvents.filter(({ claim, event }) => {
+      if (!hasText({ event }, 'query')) return false;
+      const queryAt = new Date(event.date).getTime();
+      return (claim.history || []).some((history) =>
+        history.type === 'medical_decision' &&
+        new Date(history.date).getTime() > queryAt &&
+        !String(history.comment || '').toLowerCase().includes('query'),
+      );
+    }).length;
+
+    return {
+      today: since(startOfToday),
+      weekly: since(startOfWeek),
+      monthly: since(startOfMonth),
+      totalReviewed: decisionEvents.length,
+      approved,
+      rejected,
+      queries,
+      approvalRate: decisionEvents.length ? Math.round((approved / decisionEvents.length) * 100) : 0,
+      highValueRatio: decisionEvents.length ? Math.round((highValueReviews / decisionEvents.length) * 100) : 0,
+      queryResolutionRate: queries ? Math.round((resolvedQueries / queries) * 100) : 0,
+      averageTatHours,
+      averageTatLabel: averageTatHours === null ? '—' : `${averageTatHours.toFixed(1)} hrs`,
+    };
+  }, [claims, currentUser.id, currentUser.displayName, currentUser.username]);
+
   const stats = useMemo(() => {
     const scrutinyClaims = claims.filter(c => {
       const hospital = visibleHospitals.find(h => h.id === (c.hospitalId || c.formData?.hospitalId));
@@ -325,18 +398,9 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
       ).length,
       queried: medicalClaims.filter(c => [ClaimStatus.MEDICAL_QUERY_RAISED, ClaimStatus.ASSESSMENT_QUERY_PENDING, ClaimStatus.INITIAL_QUERY_PENDING, ClaimStatus.ENHANCEMENT_QUERY_RAISED, ClaimStatus.DISCHARGE_QUERY_RAISED].includes(c.status as ClaimStatus)).length,
       rejected: medicalClaims.filter(c => [ClaimStatus.MEDICAL_REJECTED, ClaimStatus.ASSESSMENT_REJECTED, ClaimStatus.PRE_AUTH_REJECTED, ClaimStatus.ENHANCEMENT_REJECTED, ClaimStatus.DISCHARGE_REJECTED].includes(c.status as ClaimStatus)).length,
-      avgTat: '3.8 hrs',
-      performance: {
-        today: 12,
-        weekly: 58,
-        monthly: 245,
-        totalReviewed: 1240,
-        approvalRate: 82,
-        highRiskRatio: 15,
-        queryEfficiency: 94
-      }
+      avgTat: performance.averageTatLabel,
     };
-  }, [medicalClaims, claims, visibleHospitals]);
+  }, [medicalClaims, claims, visibleHospitals, performance.averageTatLabel]);
 
   const getPriorityColor = (priority: string) => {
     switch(priority) {
@@ -746,10 +810,10 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
                     Review Statistics
                   </h3>
                   <div className="grid grid-cols-2 gap-4">
-                    <PerformanceMetric label="Today" value={stats.performance.today} />
-                    <PerformanceMetric label="This Week" value={stats.performance.weekly} />
-                    <PerformanceMetric label="This Month" value={stats.performance.monthly} />
-                    <PerformanceMetric label="Total Lifetime" value={stats.performance.totalReviewed} />
+                    <PerformanceMetric label="Today" value={performance.today} />
+                    <PerformanceMetric label="This Week" value={performance.weekly} />
+                    <PerformanceMetric label="This Month" value={performance.monthly} />
+                    <PerformanceMetric label="Total Lifetime" value={performance.totalReviewed} />
                   </div>
                 </div>
 
@@ -760,9 +824,9 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
                     Decision Outcomes
                   </h3>
                   <div className="space-y-3">
-                    <OutcomeBar label="Approved" value={stats.approved} total={stats.total} color="bg-green-500" />
-                    <OutcomeBar label="Rejected" value={stats.rejected} total={stats.total} color="bg-red-500" />
-                    <OutcomeBar label="Queries Raised" value={stats.queried} total={stats.total} color="bg-yellow-500" />
+                    <OutcomeBar label="Approved" value={performance.approved} total={performance.totalReviewed} color="bg-green-500" />
+                    <OutcomeBar label="Rejected" value={performance.rejected} total={performance.totalReviewed} color="bg-red-500" />
+                    <OutcomeBar label="Queries Raised" value={performance.queries} total={performance.totalReviewed} color="bg-yellow-500" />
                   </div>
                 </div>
 
@@ -776,22 +840,22 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
                     <InsightCard 
                       icon={Zap} 
                       label="Approval Rate" 
-                      value={`${stats.performance.approvalRate}%`} 
-                      desc="Higher than team average (78%)"
+                      value={`${performance.approvalRate}%`} 
+                      desc="Based on your recorded decisions"
                       color="green"
                     />
                     <InsightCard 
                       icon={ShieldAlert} 
-                      label="High-Risk Detection" 
-                      value={`${stats.performance.highRiskRatio}%`} 
-                      desc="Cases flagged for clinical mismatch"
+                      label="High-Value Reviews" 
+                      value={`${performance.highValueRatio}%`} 
+                      desc="Reviewed cases of ₹1 lakh or more"
                       color="orange"
                     />
                     <InsightCard 
                       icon={Check} 
-                      label="Query Efficiency" 
-                      value={`${stats.performance.queryEfficiency}%`} 
-                      desc="First-time resolution rate"
+                      label="Query Resolution" 
+                      value={`${performance.queryResolutionRate}%`} 
+                      desc="Queries followed by a later medical decision"
                       color="blue"
                     />
                   </div>
