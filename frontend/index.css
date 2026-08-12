@@ -47,6 +47,7 @@ body {
   color: #0f172a;
 }
 
+/* Keep every application control aligned with the original Inter UI. */
 input[type="date"],
 input[type="datetime-local"],
 input[type="month"],
@@ -61,7 +62,7 @@ input[type="date"]::-webkit-datetime-edit-year-field,
 .font-date,
 .date-text,
 .font-verdana {
-  font-family: Verdana, Geneva, Tahoma, sans-serif !important;
+  font-family: var(--font-sans) !important;
 }
 
 .no-scrollbar::-webkit-scrollbar {
