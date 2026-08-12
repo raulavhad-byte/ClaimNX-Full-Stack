@@ -266,6 +266,16 @@ const CRMDashboard: React.FC<CRMDashboardProps> = ({
   const [currentEmailFolder, setCurrentEmailFolder] = useState<'Inbox' | 'Sent' | 'Draft' | 'Outbox'>('Inbox');
   const [emailsDb, setEmailsDb] = useState<any[]>([]);
 
+  // Email/RPA integrations are optional. A hospital-submitted admission is a
+  // CRM work item from the moment it is created, regardless of integration
+  // status. Older records did not persist caseSource, so a claim with a
+  // hospital assignment and no explicit source is treated as hospital-originated.
+  const isHospitalInitiatedClaim = (claim: Claim) => {
+    const source = String(claim.caseSource || claim.formData?.caseSource || '').trim().toLowerCase();
+    if (source === 'hospital' || source === 'hospital user') return true;
+    return !source && Boolean(claim.hospitalId || claim.formData?.hospitalId);
+  };
+
   const loadEmailsFromStorage = () => {
     try {
       const stored = localStorage.getItem('claimnx_emails');
@@ -746,11 +756,13 @@ CRM Team
         filtered = filtered.filter(c => {
           const hospId = c.formData?.hospitalId || c.hospitalId;
           const hosp = hospitals.find(h => h.id === hospId);
-          if (!hosp) return false;
+          const claimZone = hosp?.zone || c.formData?.hosp_zone || '';
+          const claimState = hosp?.state || c.formData?.hosp_state || c.formData?.p_state || '';
+          const claimDistrict = hosp?.district || c.formData?.hosp_district || c.formData?.p_district || '';
 
-          const zoneMatch = userZones.length === 0 || (hosp.zone && userZones.includes(hosp.zone));
-          const stateMatch = userStates.length === 0 || (hosp.state && userStates.includes(hosp.state));
-          const districtMatch = userDistricts.length === 0 || (hosp.district && userDistricts.includes(hosp.district));
+          const zoneMatch = userZones.length === 0 || userZones.includes(claimZone);
+          const stateMatch = userStates.length === 0 || userStates.includes(claimState);
+          const districtMatch = userDistricts.length === 0 || userDistricts.includes(claimDistrict);
 
           return zoneMatch && stateMatch && districtMatch;
         });
@@ -855,6 +867,7 @@ CRM Team
     // 6. Action Pending Bucket Logic
     if (activeTab === 'action-pending') {
       filtered = filtered.filter(c => 
+        isHospitalInitiatedClaim(c) ||
         c.submissionStatus === 'Failed' || 
         c.status === ClaimStatus.MEDICAL_REJECTED || 
         c.status === ClaimStatus.DISCHARGE_INITIATED ||
@@ -950,6 +963,7 @@ CRM Team
 
   const stats = useMemo(() => {
     const failed = baseFilteredClaims.filter(c => 
+      isHospitalInitiatedClaim(c) ||
       c.submissionStatus === 'Failed' || 
       c.status === ClaimStatus.MEDICAL_REJECTED || 
       c.status === ClaimStatus.DISCHARGE_INITIATED ||
@@ -980,6 +994,7 @@ CRM Team
 
   useEffect(() => {
     const failed = claims.filter(c => 
+      isHospitalInitiatedClaim(c) ||
       c.submissionStatus === 'Failed' || 
       c.status === ClaimStatus.MEDICAL_REJECTED || 
       c.status === ClaimStatus.DISCHARGE_INITIATED ||
@@ -1832,7 +1847,8 @@ CRM Team
                               <div className="flex items-center gap-2">
                                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
                                 <p className="text-[10px] font-black text-slate-700 uppercase tracking-tight">
-                                  {claim.failureType === 'RPA' ? 'RPA portal failed' : 
+                                  {isHospitalInitiatedClaim(claim) ? 'Hospital admission awaiting CRM action' :
+                                   claim.failureType === 'RPA' ? 'RPA portal failed' :
                                    claim.failureType === 'Email' ? 'Email integration failed' : 
                                    claim.failureType === 'Portal' ? 'Portal failed' : 'System Failed'}
                                 </p>

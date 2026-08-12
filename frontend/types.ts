@@ -211,7 +211,7 @@ export interface Claim {
   admissionDate: string;
   dischargeDate?: string;
   product?: Product;
-  caseSource?: 'Website' | 'Mobile App' | 'Internal User';
+  caseSource?: 'Website' | 'Mobile App' | 'Internal User' | 'Hospital';
   claimType?: 'Cashless' | 'Reimbursement';
   status: ClaimStatus;
   createdAt: string;

@@ -1744,6 +1744,9 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
     // Point 7: New Admissions fall to both Medical and CRM KYP bucket
     const activeHospitalId = selectedHospitalId || currentUser.hospitalId || "";
     const activeHospitalProfile = hospitals.find(h => h.id === activeHospitalId);
+    const isHospitalInitiated = currentUser.entityType === 'Hospital' ||
+      currentUser.role?.toUpperCase().startsWith('HOSPITAL') ||
+      currentUser.role === 'Hospital';
     // Medical scrutiny is the safe default. A hospital must explicitly turn
     // it off before a new admission can bypass the Medical Underwriting
     // queue. This also protects hospital users whose full profile is not
@@ -1767,6 +1770,7 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
       admissionDate:
         finalFormData.adm_date || new Date().toISOString().split("T")[0],
       claimType: 'Cashless',
+      caseSource: isHospitalInitiated ? 'Hospital' : 'Internal User',
       product: finalFormData.product || Product.CPC,
       status: initialStatus,
       createdBy: currentUser.id,
@@ -1775,6 +1779,7 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
       hospitalId: activeHospitalId,
       formData: {
         ...finalFormData,
+        caseSource: isHospitalInitiated ? 'Hospital' : 'Internal User',
         hosp_name: currentUser.hospitalName,
         hosp_address: currentUser.address,
         hosp_rohini_id: currentUser.rohiniId,
