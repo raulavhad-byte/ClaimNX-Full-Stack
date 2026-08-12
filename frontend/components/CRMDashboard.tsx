@@ -815,7 +815,7 @@ CRM Team
 
     // 3. Filter by hospital selection
     if (!filterHospital.includes('all')) {
-      filtered = filtered.filter(c => filterHospital.includes(c.formData?.hospitalId || ''));
+      filtered = filtered.filter(c => filterHospital.includes(c.hospitalId || c.formData?.hospitalId || ''));
     }
 
     // 4. Filter by status
@@ -1010,9 +1010,31 @@ CRM Team
     }
   }, [claims, stats.failed]);
 
-  const getHospitalName = (id: string) => {
-    return hospitals.find(h => h.id === id)?.hospitalName || 'Unknown Hospital';
+  const getClaimHospitalId = (claim: Claim) => String(claim.hospitalId || claim.formData?.hospitalId || '');
+
+  const getHospitalName = (claim: Claim) => {
+    const hospitalId = getClaimHospitalId(claim);
+    const directoryName = hospitals.find(h => h.id === hospitalId)?.hospitalName;
+    return directoryName
+      || claim.formData?.hospitalName
+      || claim.formData?.hospital_name
+      || claim.formData?.hosp_name
+      || 'Hospital not recorded';
   };
+
+  const availableHospitals = useMemo(() => {
+    const options = new Map<string, string>();
+    baseFilteredClaims.forEach((claim) => {
+      const hospitalId = getClaimHospitalId(claim);
+      const hospitalName = getHospitalName(claim);
+      if (hospitalId && hospitalName !== 'Hospital not recorded') options.set(hospitalId, hospitalName);
+    });
+    hospitals.forEach((hospital) => {
+      if (currentUser.assignedHospitalIds?.length && !currentUser.assignedHospitalIds.includes(hospital.id)) return;
+      options.set(hospital.id, hospital.hospitalName || hospital.displayName || 'Hospital');
+    });
+    return Array.from(options, ([id, hospitalName]) => ({ id, hospitalName }));
+  }, [baseFilteredClaims, hospitals, currentUser.assignedHospitalIds]);
 
   const formatDateForDisplay = (dateStr: string) => {
     if (!dateStr) return '';
@@ -1654,7 +1676,7 @@ CRM Team
                       {filterHospital.includes('all') 
                         ? 'All Hospitals' 
                         : filterHospital.length === 1 
-                          ? hospitals.find(h => h.id === filterHospital[0])?.hospitalName || '1 Hospital'
+                          ? availableHospitals.find(h => h.id === filterHospital[0])?.hospitalName || '1 Hospital'
                           : `${filterHospital.length} Hospitals`}
                     </span>
                     <ChevronDown size={14} className={`transition-transform ${showHospitalDropdown ? 'rotate-180' : ''}`} />
@@ -1673,8 +1695,7 @@ CRM Team
                         {filterHospital.includes('all') && <Check size={14} className="text-rose-600" />}
                       </button>
                       <div className="h-px bg-slate-100 my-1"></div>
-                      {hospitals
-                        .filter(h => !currentUser.assignedHospitalIds || currentUser.assignedHospitalIds.includes(h.id))
+                      {availableHospitals
                         .map(h => {
                           const isSelected = filterHospital.includes(h.id);
                           return (
@@ -1822,7 +1843,9 @@ CRM Team
                             <div>
                               <Link to={`/process-claim/${claim.id}?source=crm`} className="text-xs font-black text-slate-800 hover:text-rose-600 transition-colors">{claim.patientName}</Link>
                               <div className="flex items-center gap-2 mt-0.5">
-                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tight">{claim.id}</span>
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tight">
+                                  {claim.caseReferenceId || claim.formData?.p_uhid || claim.policyNumber || 'Hospital admission'}
+                                </span>
                                 <span className="w-1 h-1 rounded-full bg-slate-300"></span>
                                 <span className="text-[9px] font-black text-indigo-600 uppercase tracking-widest">
                                   {claim.status.includes('Pre Auth') || claim.status.includes('MEDICAL') || claim.status === ClaimStatus.INITIAL_QUERY_PENDING || claim.status.includes('Enhancement') ? 'Pre auth & Enhancement' : 
@@ -1838,7 +1861,7 @@ CRM Team
                           </span>
                         </td>
                         <td className="px-6 py-4">
-                          <p className="text-[10px] font-black text-slate-700 uppercase tracking-tight truncate max-w-[120px]">{getHospitalName(claim.formData?.hospitalId || '')}</p>
+                          <p className="text-[10px] font-black text-slate-700 uppercase tracking-tight truncate max-w-[120px]">{getHospitalName(claim)}</p>
                           <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">{claim.formData?.tpa_provider || claim.insuranceProvider}</p>
                         </td>
                         {activeTab === 'action-pending' ? (

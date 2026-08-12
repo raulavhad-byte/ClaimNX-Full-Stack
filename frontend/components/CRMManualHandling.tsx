@@ -141,7 +141,11 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
 
   const insuranceEntity = useMemo(() => {
     const all = [...insurers, ...tpas];
-    return all.find((e) => e.name === claim?.insuranceProvider);
+    const normalizePayer = (value: unknown) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const payer = normalizePayer(claim?.insuranceProvider || claim?.formData?.tpa_provider);
+    return all.find((entity) =>
+      normalizePayer(entity.id) === payer || normalizePayer(entity.name) === payer,
+    );
   }, [claim, insurers, tpas]);
 
   const hospital = useMemo(() => {
@@ -153,6 +157,20 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
         h.id === currentUser?.id,
     );
   }, [claim, hospitals, currentUser]);
+
+  const payerCredential = useMemo(() => {
+    if (!hospital) return undefined;
+    const normalizePayer = (value: unknown) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const payerValues = [
+      insuranceEntity?.id,
+      insuranceEntity?.name,
+      claim?.insuranceProvider,
+      claim?.formData?.tpa_provider,
+    ].map(normalizePayer).filter(Boolean);
+    return hospital.portalCredentials?.find((credential: any) =>
+      payerValues.includes(normalizePayer(credential.entityId)),
+    );
+  }, [claim, hospital, insuranceEntity]);
 
   const smtpConfig = useMemo(() => {
     return (
@@ -353,22 +371,16 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
     if (insuranceEntity) {
       // Check if hospital has specific credentials for this entity
       // IMPORTANT: Check both entityId (new) and entityName (legacy/ManageHospital behavior)
-      const hospitalCreds = hospital?.portalCredentials?.find(
-        (c: any) =>
-          c.entityId === insuranceEntity.id ||
-          c.entityId === insuranceEntity.name,
-      );
-
-      if (hospitalCreds) {
-        setPortalId(hospitalCreds.username || "");
-        setPortalPassword(hospitalCreds.password || "");
+      if (payerCredential) {
+        setPortalId(payerCredential.username || "");
+        setPortalPassword(payerCredential.password || "");
       } else {
         setPortalId(insuranceEntity.portalId || "");
         setPortalPassword(insuranceEntity.portalPassword || "");
       }
-      setPortalLink(insuranceEntity.portalLink || "");
+        setPortalLink((payerCredential as any)?.portalLink || insuranceEntity.portalLink || "");
     }
-  }, [insuranceEntity, hospital]);
+  }, [insuranceEntity, payerCredential]);
 
   useEffect(() => {
     if (!claim) return;
@@ -642,7 +654,7 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
           </button>
           <button
             onClick={() =>
-              navigate(`/patient-dashboard/${encodeURIComponent(claim.patientName)}?claimId=${encodeURIComponent(claim.id)}&source=crm`, {
+              navigate(`/process-claim/${encodeURIComponent(claim.id)}?source=crm`, {
                 state: { from: "/crm-handle/" + claim.id },
               })
             }
@@ -654,10 +666,12 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
 
         <div className="flex items-center gap-3">
           <span className="px-3 py-1 bg-rose-50 text-rose-600 rounded-lg text-[10px] font-black uppercase tracking-widest border border-rose-100">
-            Failed {claim.failureType} Submission
+            {claim.submissionStatus === 'Failed'
+              ? `Failed ${claim.failureType || 'payer'} Submission`
+              : 'Hospital Submission'}
           </span>
           <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-lg text-[10px] font-black uppercase tracking-widest border border-slate-200">
-            {claim.id}
+            {claim.caseReferenceId || claim.policyNumber || claim.insuranceProvider || 'Hospital claim'}
           </span>
         </div>
       </div>
@@ -1145,22 +1159,16 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
                           type="button"
                           onClick={() => {
                             if (insuranceEntity) {
-                              const hospitalCreds =
-                                hospital?.portalCredentials?.find(
-                                  (c: any) =>
-                                    c.entityId === insuranceEntity.id ||
-                                    c.entityId === insuranceEntity.name,
-                                );
-                              if (hospitalCreds) {
-                                setPortalId(hospitalCreds.username || "");
-                                setPortalPassword(hospitalCreds.password || "");
+                              if (payerCredential) {
+                                setPortalId(payerCredential.username || "");
+                                setPortalPassword(payerCredential.password || "");
                               } else {
                                 setPortalId(insuranceEntity.portalId || "");
                                 setPortalPassword(
                                   insuranceEntity.portalPassword || "",
                                 );
                               }
-                              setPortalLink(insuranceEntity.portalLink || "");
+                              setPortalLink((payerCredential as any)?.portalLink || insuranceEntity.portalLink || "");
                               toast.info(
                                 "Credentials reloaded from Payer Config",
                               );
