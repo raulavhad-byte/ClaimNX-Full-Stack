@@ -69,7 +69,7 @@ import { auditService } from '../services/auditService';
 import DownloadReportModal from './DownloadReportModal';
 import { toast } from 'sonner';
 import PendingTAT from './PendingTAT';
-import { formatDate, formatDateTime } from '../utils';
+import { formatDate, formatDateTime, formatTimelineEventTAT } from '../utils';
 
 interface CRMDashboardProps {
   claims: Claim[];
@@ -2521,16 +2521,7 @@ CRM Team
                         event.stageData?.enhancement_amount || event.stageData?.enhancement_requested ? { label: 'Enhancement Requested', amount: event.stageData?.enhancement_amount || event.stageData?.enhancement_requested, color: 'font-black text-blue-600' } :
                         event.stageData?.estimated_cost || showPatientDashboard.estimatedCost ? { label: 'Estimated Cost', amount: event.stageData?.estimated_cost || showPatientDashboard.estimatedCost, color: 'font-black text-blue-600' } : null;
 
-                      // Compute TAT
-                      let tatStr = '00:03';
-                      if (idx < showPatientDashboard.history.length - 1) {
-                        const nextDate = showPatientDashboard.history[idx + 1].date;
-                        if (nextDate && event.date) {
-                          const diff = Math.abs(new Date(event.date).getTime() - new Date(nextDate).getTime());
-                          const mins = Math.floor(diff / (1000 * 60));
-                          tatStr = `00:${mins.toString().padStart(2, '0')}`;
-                        }
-                      }
+                      const tatStr = formatTimelineEventTAT(event, showPatientDashboard.history[idx + 1]);
 
                       return (
                         <div key={event.id || idx} className="relative pl-8 border-l-2 border-slate-100 last:border-0 pb-6">

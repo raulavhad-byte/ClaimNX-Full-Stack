@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { formatDate as stdFormatDate, formatDateTime, formatTAT, safeHtml2Canvas } from "../utils";
+import { formatDate as stdFormatDate, formatDateTime, formatClaimTAT, getClaimStageStartTime, parseDate, safeHtml2Canvas } from "../utils";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import jsPDF from "jspdf";
 import {
@@ -1271,11 +1271,11 @@ Sub-Limits: ${kyp.subLimits || "N/A"}
         );
       case "tat":
         // TAT Visualization Logic
-        const diffMs = new Date().getTime() - new Date(claim.createdAt).getTime();
+        const diffMs = new Date().getTime() - parseDate(getClaimStageStartTime(claim)).getTime();
         const totalHrs = Math.floor(diffMs / (1000 * 60 * 60));
         const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
         
-        const timeText = formatTAT(claim.createdAt);
+        const timeText = formatClaimTAT(claim);
         
         const isHigh = totalHrs >= 4;
         const isNoTat = totalHrs === 0 && mins === 0;

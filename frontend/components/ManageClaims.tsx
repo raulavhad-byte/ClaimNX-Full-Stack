@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useRef } from 'react';
-import { formatDate, formatDateTime, parseDate, formatTAT } from '../utils';
+import { formatDate, formatDateTime, parseDate, formatClaimTAT } from '../utils';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Claim, ClaimStatus, ClaimStage, InsuranceEntity } from '../types';
 import { auditService } from '../services/auditService';
@@ -522,7 +522,7 @@ const ManageClaims: React.FC<ManageClaimsProps> = ({
                       {col.id === 'tat' && (
                         <div className="text-center">
                           <span className={`${getStatusStyle(claim.status)} px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest`}>
-                            {formatTAT(claim.createdAt)}
+                            {formatClaimTAT(claim)}
                           </span>
                         </div>
                       )}

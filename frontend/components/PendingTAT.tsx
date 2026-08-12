@@ -17,7 +17,7 @@ const PendingTAT: React.FC<PendingTATProps> = ({ startTime, completedTime, type 
     
     const timer = setInterval(() => {
       setCurrentTime(new Date());
-    }, 10000); // Update every 10 seconds
+    }, 10000); // Keep operational dashboards live while a case is pending.
     
     return () => clearInterval(timer);
   }, [completedTime]);

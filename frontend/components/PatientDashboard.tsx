@@ -77,7 +77,7 @@ import {
   Check
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { formatDate, formatDateTime, safeHtml2Canvas, safeFormatYmd } from '../utils';
+import { formatDate, formatDateTime, formatTimelineEventTAT, safeHtml2Canvas, safeFormatYmd } from '../utils';
 import { clinicalAiService } from '../services/clinicalAiService';
 import { documentsApi } from '../services/api';
 
@@ -2108,23 +2108,9 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
                                     <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest bg-slate-50 px-2 py-0.5 rounded border border-slate-100">
                                       {formatDateTime(event.date)}
                                     </span>
-                                    {idx < claim.history.length - 1 && (
-                                      <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 border border-emerald-100 rounded flex items-center gap-1 uppercase tracking-widest">
-                                        <Clock size={10} /> TAT:{" "}
-                                        {(() => {
-                                          try {
-                                            const prevDate = claim.history[idx + 1].date;
-                                            const currDate = event.date;
-                                            const diffMs = Math.abs(new Date(currDate).getTime() - new Date(prevDate).getTime());
-                                            const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
-                                            const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-                                            return `${diffHrs}h ${diffMins}m`;
-                                          } catch (e) {
-                                            return '0h 0m';
-                                          }
-                                        })()}
-                                      </span>
-                                    )}
+                                    <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 border border-emerald-100 rounded flex items-center gap-1 uppercase tracking-widest">
+                                      <Clock size={10} /> TAT: {formatTimelineEventTAT(event, claim.history[idx + 1])}
+                                    </span>
                                     {(() => {
                                       if (!event.stageData) return null;
                                       const statusLower = String(event.status || '').toLowerCase();

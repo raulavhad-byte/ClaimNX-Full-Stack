@@ -11,7 +11,7 @@ import { auditService } from '../services/auditService';
 import { documentsApi } from '../services/api';
 import { toast } from 'sonner';
 import PendingTAT from './PendingTAT';
-import { formatDate, parseDate } from '../utils';
+import { formatDate, formatClaimTAT, getClaimStageStartTime, parseDate } from '../utils';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 
 const formatDateTime = (date: any): string => {
@@ -715,7 +715,7 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
                     </td>
                     <td className="px-6 py-4 text-center">
                       <PendingTAT 
-                        startTime={claim.updatedAt} 
+                        startTime={getClaimStageStartTime(claim)}
                         completedTime={(claim.status === ClaimStatus.MEDICAL_APPROVED || claim.status === ClaimStatus.ASSESSMENT_APPROVED) ? claim.updatedAt : undefined} 
                         type="medical" 
                       />

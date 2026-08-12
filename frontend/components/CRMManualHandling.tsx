@@ -44,7 +44,7 @@ import { emailTemplateService } from "../services/emailTemplateService";
 import { configApi, usersApi } from "../services/api";
 import { toast } from "sonner";
 
-import { formatDate } from "../utils";
+import { formatDate, formatTimelineEventTAT } from "../utils";
 import FALLetterForm, { FALLetterData } from "./FALLetterForm";
 
 interface CRMManualHandlingProps {
@@ -1421,16 +1421,7 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
                         event.stageData?.enhancement_amount || event.stageData?.enhancement_requested ? { label: 'Enhancement Requested', amount: event.stageData?.enhancement_amount || event.stageData?.enhancement_requested, color: 'font-black text-blue-600' } :
                         event.stageData?.estimated_cost || claim.estimatedCost ? { label: 'Estimated Cost', amount: event.stageData?.estimated_cost || claim.estimatedCost, color: 'font-black text-blue-600' } : null;
 
-                      // Compute TAT
-                      let tatStr = '00:03';
-                      if (idx < claim.history.length - 1) {
-                        const nextDate = claim.history[idx + 1].date;
-                        if (nextDate && event.date) {
-                          const diff = Math.abs(new Date(event.date).getTime() - new Date(nextDate).getTime());
-                          const mins = Math.floor(diff / (1000 * 60));
-                          tatStr = `00:${mins.toString().padStart(2, '0')}`;
-                        }
-                      }
+                      const tatStr = formatTimelineEventTAT(event, claim.history[idx + 1]);
 
                       return (
                         <div key={event.id || idx} className="relative pl-8 border-l-2 border-slate-100 last:border-0 pb-6">

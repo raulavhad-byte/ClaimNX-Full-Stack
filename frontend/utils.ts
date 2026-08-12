@@ -1,4 +1,5 @@
 import html2canvas from 'html2canvas';
+import type { Claim, TimelineEvent } from './types';
 
 /**
  * Standard date formatting for ClaimNX App
@@ -129,6 +130,32 @@ export const formatTAT = (startDate: any, endDate: any = new Date()): string => 
   
   return `${totalHrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
 };
+
+/**
+ * Returns the timestamp at which the claim entered its current stage.  The
+ * workflow history is the source of truth; updatedAt is only a safe fallback
+ * for legacy records that pre-date history tracking.
+ */
+export const getClaimStageStartTime = (claim: Pick<Claim, 'status' | 'history' | 'updatedAt' | 'createdAt'>): string => {
+  const matchingEvents = (claim.history || [])
+    .filter((event) => event?.status === claim.status && !isNaN(parseDate(event.date).getTime()))
+    .sort((left, right) => parseDate(right.date).getTime() - parseDate(left.date).getTime());
+
+  return matchingEvents[0]?.date || claim.updatedAt || claim.createdAt;
+};
+
+/** Live TAT for the current claim stage, updated by the caller's clock. */
+export const formatClaimTAT = (
+  claim: Pick<Claim, 'status' | 'history' | 'updatedAt' | 'createdAt'>,
+  endDate: any = new Date(),
+): string => formatTAT(getClaimStageStartTime(claim), endDate);
+
+/** TAT spent on one timeline event before the following event occurred. */
+export const formatTimelineEventTAT = (
+  event: Pick<TimelineEvent, 'date'>,
+  followingEvent?: Pick<TimelineEvent, 'date'>,
+  now: any = new Date(),
+): string => formatTAT(event.date, followingEvent?.date || now);
 
 export function resolveOklchColor(colorStr: string): string {
   try {
