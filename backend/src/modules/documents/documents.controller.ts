@@ -41,7 +41,7 @@ export class DocumentsController {
     @UploadedFile() file: any,
     @Body('claim_id') claimId: string,
     @Body('category') category: string | undefined,
-    @CurrentUser('id') uploadedBy: string,
+    @CurrentUser() actor: any,
   ) {
     if (!file) {
       throw new BadRequestException('A claim document file is required.');
@@ -51,7 +51,7 @@ export class DocumentsController {
       file,
       claimId,
       category,
-      uploadedBy,
+      actor,
     });
   }
 
@@ -95,15 +95,34 @@ export class DocumentsController {
   @Get()
   findAll(
     @Query() filter: DocumentFilterDto,
+    @CurrentUser() actor: any,
   ) {
-    return this.documentsService.findAll(filter);
+    return this.documentsService.findAll(filter, actor);
+  }
+
+  @Get('claim/:claimId/resolve')
+  resolveClaimDocument(
+    @Param('claimId') claimId: string,
+    @CurrentUser() actor: any,
+    @Query('document_id') documentId?: string,
+    @Query('file_name') fileName?: string,
+    @Query('category') category?: string,
+  ) {
+    return this.documentsService.resolveClaimDocument({
+      claimId,
+      documentId,
+      fileName,
+      category,
+      actor,
+    });
   }
 
   @Get(':id/preview')
   preview(
     @Param('id') id: string,
+    @CurrentUser() actor: any,
   ) {
-    return this.documentsService.createPreviewUrl(id);
+    return this.documentsService.createPreviewUrl(id, actor);
   }
 
   @Get(':id')

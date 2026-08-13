@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -10,6 +11,11 @@ import { DatabaseService } from '../../database/database.service';
 import { CreateClaimDto } from './dto/create-claim.dto';
 import { UpdateClaimDto } from './dto/update-claim.dto';
 import { ClaimFilterDto } from './dto/claim-filter.dto';
+import {
+  canUpdateClaimAtStage,
+  getStageUpdatePermission,
+} from './claim-stage-permissions';
+import type { ClaimStageActor } from './claim-stage-permissions';
 
 @Injectable()
 export class ClaimsService {
@@ -237,44 +243,36 @@ export class ClaimsService {
     );
   }
 
-  async findAll(filter?: ClaimFilterDto) {
-    let query = this.supabase
-      .from('claims')
-      .select('*')
-      .eq('is_deleted', false);
-
-    if (filter?.status) {
-      query = query.eq('status', filter.status);
+  async findAll(filter?: ClaimFilterDto, actorUserId?: string) {
+    if (!actorUserId) {
+      throw new BadRequestException('An authenticated user is required to read claims.');
     }
 
-    if (filter?.priority) {
-      query = query.eq('priority', filter.priority);
-    }
-
-    if (filter?.patient_id) {
-      query = query.eq('patient_id', filter.patient_id);
-    }
-
-    if (filter?.hospital_id) {
-      query = query.eq('hospital_id', filter.hospital_id);
-    }
-
-    if (filter?.payer_id) {
-      query = query.eq('payer_id', filter.payer_id);
-    }
-
-    const { data, error } = await query.order(
-      'created_at',
-      { ascending: false },
-    );
+    // Finance, Accounts and Reconciliation users are always scoped in the
+    // database. The RPC resolves assigned hospitals plus Zone → State,
+    // State, and District mappings from users.profile_data before returning a
+    // claim, so the browser never receives an out-of-scope record.
+    const { data, error } = await this.supabase
+      .rpc('claims_visible_to_user', {
+        p_actor_user_id: actorUserId,
+        p_status: filter?.status ?? null,
+        p_priority: filter?.priority ?? null,
+        p_patient_id: filter?.patient_id ?? null,
+        p_hospital_id: filter?.hospital_id ?? null,
+        p_payer_id: filter?.payer_id ?? null,
+      });
 
     if (error) throw error;
+
+    const claims = [...(data ?? [])].sort((left: any, right: any) =>
+      String(right.created_at ?? '').localeCompare(String(left.created_at ?? '')),
+    );
 
     // Keep the hospital identifier as the relational source of truth, but
     // enrich read models with its display name. Queue screens must not expose
     // a UUID when a legacy claim predates the hospital-name snapshot.
-    const hospitalIds = [...new Set((data ?? []).map((claim) => claim.hospital_id).filter(Boolean))];
-    if (hospitalIds.length === 0) return data;
+    const hospitalIds = [...new Set(claims.map((claim: any) => claim.hospital_id).filter(Boolean))];
+    if (hospitalIds.length === 0) return claims;
 
     const { data: hospitalRows, error: hospitalError } = await this.supabase
       .from('hospitals')
@@ -290,13 +288,13 @@ export class ClaimsService {
       ]),
     );
 
-    return (data ?? []).map((claim) => ({
+    return claims.map((claim: any) => ({
       ...claim,
       hospital_name: namesById.get(claim.hospital_id) ?? null,
     }));
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, actorUserId?: string) {
     const { data, error } = await this.supabase
       .from('claims')
       .select('*')
@@ -308,13 +306,34 @@ export class ClaimsService {
       throw new NotFoundException('Claim not found');
     }
 
+    if (actorUserId) {
+      await this.assertClaimVisibleToUser(data, actorUserId, 'view');
+    }
+
     return data;
   }
 
   async update(
     id: string,
     updateClaimDto: UpdateClaimDto,
+    actor: ClaimStageActor,
   ) {
+    const currentClaim = await this.findOne(id);
+    await this.assertClaimVisibleToUser(currentClaim, actor.id, 'update');
+
+    const isStageChange = Boolean(
+      updateClaimDto.status && updateClaimDto.status !== currentClaim.status,
+    );
+    if (isStageChange && !canUpdateClaimAtStage(actor, currentClaim.status)) {
+      const requiredPermission = getStageUpdatePermission(currentClaim.status);
+      throw new ForbiddenException(
+        `Your role cannot update claims in the "${currentClaim.status}" stage. ` +
+        `Required permission: ${requiredPermission}.`,
+      );
+    }
+
+    this.assertFinanceSettlementTransition(currentClaim.status, updateClaimDto.status);
+
     const { data, error } = await this.supabase
       .from('claims')
       .update({
@@ -331,6 +350,88 @@ export class ClaimsService {
     }
 
     return data;
+  }
+
+  private async assertClaimVisibleToUser(
+    claim: any,
+    actorUserId: string,
+    action: 'view' | 'update',
+  ) {
+    const { data: visibleClaims, error: visibilityError } = await this.supabase
+      .rpc('claims_visible_to_user', {
+        p_actor_user_id: actorUserId,
+        p_status: null,
+        p_priority: null,
+        p_patient_id: claim.patient_id ?? null,
+        p_hospital_id: claim.hospital_id ?? null,
+        p_payer_id: claim.payer_id ?? null,
+      });
+
+    if (visibilityError) throw visibilityError;
+    if (!(visibleClaims ?? []).some((visibleClaim: any) => visibleClaim.id === claim.id)) {
+      throw new ForbiddenException(`You do not have access to ${action} this claim.`);
+    }
+  }
+
+  private assertFinanceSettlementTransition(currentStatus?: string, nextStatus?: string) {
+    if (!currentStatus || !nextStatus || currentStatus === nextStatus) return;
+
+    const transitions: Record<string, string[]> = {
+      'File Dispatched': [
+        'Claim under process', 'Claim Under query', 'Pending with insurer Medical Team',
+        'Claim Approved', 'Partially Claim Settled - Recoverable',
+        'Partially Claim Settled - Non-Recoverable', 'Complete Settlement',
+      ],
+      'Claim under process': [
+        'Claim Under query', 'Pending with insurer Medical Team', 'Claim Approved',
+        'Partially Claim Settled - Recoverable', 'Partially Claim Settled - Non-Recoverable',
+        'Complete Settlement',
+      ],
+      'Pending with insurer Medical Team': [
+        'Claim Under query', 'Claim under process', 'Claim Pending with insurer Medical',
+        'Claim Approved', 'Partially Claim Settled - Recoverable',
+        'Partially Claim Settled - Non-Recoverable', 'Complete Settlement',
+      ],
+      'Claim Pending with insurer Medical': [
+        'Claim Under query', 'Claim under process', 'Claim Approved',
+        'Partially Claim Settled - Recoverable', 'Partially Claim Settled - Non-Recoverable',
+        'Complete Settlement',
+      ],
+      'Claim Under query': [
+        'Claim Query Resolved', 'Claim Approved', 'Partially Claim Settled - Recoverable',
+        'Partially Claim Settled - Non-Recoverable', 'Complete Settlement',
+      ],
+      'Claim Query Resolved': [
+        'Claim Under query', 'Claim under process', 'Pending with insurer Medical Team',
+        'Claim Approved', 'Partially Claim Settled - Recoverable',
+        'Partially Claim Settled - Non-Recoverable', 'Complete Settlement',
+      ],
+      'Claim Approved': [
+        'Partially Claim Settled - Recoverable', 'Partially Claim Settled - Non-Recoverable',
+        'Complete Settlement',
+      ],
+      'Partially Claim Settled - Recoverable': [
+        'Partially Claim Settled - Non-Recoverable', 'Complete Settlement', 'Account Reconciliation',
+      ],
+      'Partially Claim Settled - Non-Recoverable': [
+        'Complete Settlement', 'Account Reconciliation', 'Bank Reconciliation Completed',
+      ],
+      'Complete Settlement': [
+        'Account Reconciliation', 'Bank Reconciliation Completed', 'Claim Approved',
+        'Partially Claim Settled - Recoverable',
+      ],
+      'Account Reconciliation': [
+        'Bank Reconciliation Completed', 'Claim Approved', 'Partially Claim Settled - Recoverable',
+      ],
+      'Bank Reconciliation Completed': [],
+    };
+
+    if (Object.prototype.hasOwnProperty.call(transitions, currentStatus) &&
+        !transitions[currentStatus].includes(nextStatus)) {
+      throw new BadRequestException(
+        `Invalid Finance settlement transition from ${currentStatus} to ${nextStatus}.`,
+      );
+    }
   }
 
   async remove(id: string) {

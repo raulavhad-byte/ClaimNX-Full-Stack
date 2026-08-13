@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -22,6 +23,57 @@ export class DocumentsService {
   private static readonly claimDocumentsBucket = 'claim-documents';
   private static readonly hospitalAssetsBucket = 'hospital-assets';
   private static readonly maxFileSizeBytes = 25 * 1024 * 1024;
+
+  private async assertClaimAccess(claimId: string, actor: {
+    id: string;
+    hospitalId?: string | null;
+    role?: string | null;
+    permissions?: unknown;
+    profileData?: unknown;
+  }) {
+    const { data: claim, error } = await this.databaseService.getClient()
+      .from('claims')
+      .select('id, hospital_id, organization_id')
+      .eq('id', claimId)
+      .eq('is_deleted', false)
+      .maybeSingle<{ id: string; hospital_id: string | null; organization_id: string | null }>();
+    if (error) throw error;
+    if (!claim) throw new NotFoundException('Claim not found.');
+
+    const role = String(actor.role ?? '').trim().toUpperCase();
+    const permissions = Array.isArray(actor.permissions) ? actor.permissions.map(String) : [];
+    const hasGlobalAccess = role === 'SUPER ADMIN' || permissions.includes('all');
+    if (!hasGlobalAccess) {
+      const profile = actor.profileData && typeof actor.profileData === 'object'
+        ? actor.profileData as Record<string, unknown>
+        : {};
+      const assignedHospitalIds = Array.isArray(profile.assignedHospitalIds)
+        ? profile.assignedHospitalIds.map(String)
+        : [];
+      const scopedStates = Array.isArray(profile.states) ? profile.states.map(String) : [];
+      const scopedDistricts = Array.isArray(profile.districts) ? profile.districts.map(String) : [];
+      let hasHospitalAccess = claim.hospital_id === actor.hospitalId ||
+        (!!claim.hospital_id && assignedHospitalIds.includes(claim.hospital_id));
+
+      if (!hasHospitalAccess && claim.hospital_id && (scopedStates.length || scopedDistricts.length)) {
+        const { data: hospital, error: hospitalError } = await this.databaseService.getClient()
+          .from('hospitals')
+          .select('state, district')
+          .eq('id', claim.hospital_id)
+          .eq('is_deleted', false)
+          .maybeSingle<{ state: string | null; district: string | null }>();
+        if (hospitalError) throw hospitalError;
+        const stateMatches = scopedStates.length === 0 || (!!hospital?.state && scopedStates.includes(hospital.state));
+        const districtMatches = scopedDistricts.length === 0 || (!!hospital?.district && scopedDistricts.includes(hospital.district));
+        hasHospitalAccess = stateMatches && districtMatches;
+      }
+
+      if (!hasHospitalAccess) {
+        throw new ForbiddenException('You do not have access to documents for this hospital claim.');
+      }
+    }
+    return claim;
+  }
 
   private async ensurePrivateBucket(bucket: string) {
     const storage = this.databaseService.getClient().storage;
@@ -103,7 +155,7 @@ export class DocumentsService {
     file: { buffer: Buffer; originalname: string; mimetype?: string; size: number };
     claimId: string;
     category?: string;
-    uploadedBy: string;
+    actor: { id: string; hospitalId?: string | null; role?: string | null; permissions?: unknown; profileData?: unknown };
   }) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.claimId)) {
       throw new BadRequestException('A valid claim ID is required for document upload.');
@@ -112,8 +164,10 @@ export class DocumentsService {
       throw new BadRequestException('Claim documents must be between 1 byte and 25 MB.');
     }
 
+    await this.assertClaimAccess(input.claimId, input.actor);
     await this.ensureClaimDocumentsBucket();
 
+    const mimeType = this.resolveMimeType(input.file.originalname, input.file.mimetype);
     const safeFileName = input.file.originalname
       .replace(/[^a-zA-Z0-9._-]/g, '_')
       .replace(/^_+/, '') || 'claim-document';
@@ -124,7 +178,7 @@ export class DocumentsService {
       objectPath,
       input.file.buffer,
       {
-        contentType: input.file.mimetype || 'application/octet-stream',
+        contentType: mimeType,
         upsert: false,
       },
     );
@@ -133,25 +187,105 @@ export class DocumentsService {
       throw new BadRequestException(`Unable to store claim document: ${uploadError.message}`);
     }
 
+    let document: any;
     try {
-      const document = await this.documentsRepository.create({
+      document = await this.documentsRepository.create({
         claim_id: input.claimId,
         file_name: input.file.originalname,
         file_path: `${DocumentsService.claimDocumentsBucket}/${objectPath}`,
-        mime_type: input.file.mimetype || 'application/octet-stream',
+        mime_type: mimeType,
         category: input.category,
         file_size: input.file.size,
-        uploaded_by: input.uploadedBy,
+        uploaded_by: input.actor.id,
       });
 
+      // The documents table is the source of truth. Persist its ID in the
+      // claim workflow data so every timeline entry can resolve the same
+      // private Storage object after a reload or for another authorised user.
+      await this.linkDocumentToClaimTimeline({ claimId: input.claimId, document });
       return document;
     } catch (error) {
+      // Keep object storage and the database registry atomic from the
+      // caller's perspective.  A failed timeline link must not leave an
+      // orphaned database document pointing at a removed Storage object.
+      if (document?.id) {
+        await this.documentsRepository.delete(document.id).catch(() => undefined);
+      }
       await storage.remove([objectPath]);
       throw error;
     }
   }
 
-  async findAll(filter: DocumentFilterDto) {
+  private async linkDocumentToClaimTimeline(input: { claimId: string; document: any }) {
+    const { data: claim, error: claimError } = await this.databaseService
+      .getClient()
+      .from('claims')
+      .select('id, form_data')
+      .eq('id', input.claimId)
+      .eq('is_deleted', false)
+      .maybeSingle<{ id: string; form_data: Record<string, any> | null }>();
+    if (claimError) throw claimError;
+    if (!claim) throw new NotFoundException('Claim not found for uploaded document.');
+
+    const formData = claim.form_data && typeof claim.form_data === 'object' ? claim.form_data : {};
+    const reference = {
+      documentId: input.document.id,
+      name: input.document.file_name,
+      type: input.document.category || 'Claim Document',
+      mimeType: input.document.mime_type || 'application/octet-stream',
+      uploadedAt: input.document.uploaded_at || new Date().toISOString(),
+      fileSize: input.document.file_size ?? null,
+    };
+    const upsertDocumentReference = (documents: any[]) => {
+      const normalisedName = this.normaliseFileName(reference.name);
+
+      // The claim update happens before the multipart upload, so the latest
+      // workflow event can contain a lightweight, unlinked document entry.
+      // Replace that temporary entry rather than leaving a second, broken
+      // "View" item alongside the persisted document.
+      const retained = documents.filter((item: any) => {
+        if (item?.documentId === reference.documentId) return false;
+        return item?.documentId || this.normaliseFileName(item?.name) !== normalisedName;
+      });
+
+      return [...retained, reference];
+    };
+
+    const existingDocuments = Array.isArray(formData.uploadedDocuments) ? formData.uploadedDocuments : [];
+    const uploadedDocuments = upsertDocumentReference(existingDocuments);
+    const history = Array.isArray(formData.history) ? [...formData.history] : [];
+
+    if (history.length > 0) {
+      const lastIndex = history.length - 1;
+      const latest = history[lastIndex] && typeof history[lastIndex] === 'object' ? history[lastIndex] : {};
+      const stageData = latest.stageData && typeof latest.stageData === 'object' ? latest.stageData : {};
+      const eventDocuments = Array.isArray(stageData.documents) ? stageData.documents : [];
+      history[lastIndex] = {
+        ...latest,
+        stageData: { ...stageData, documents: upsertDocumentReference(eventDocuments) },
+      };
+    }
+
+    const { error: updateError } = await this.databaseService
+      .getClient()
+      .from('claims')
+      .update({ form_data: { ...formData, uploadedDocuments, history }, updated_at: new Date().toISOString() })
+      .eq('id', input.claimId)
+      .eq('is_deleted', false);
+    if (updateError) throw updateError;
+  }
+
+  async findAll(
+    filter: DocumentFilterDto,
+    actor: { id: string; hospitalId?: string | null; role?: string | null; permissions?: unknown; profileData?: unknown },
+  ) {
+    // Documents are never a global directory. Every supported browser list
+    // is claim-scoped, which lets us enforce the claim's hospital boundary
+    // before returning even file names or categories.
+    if (!filter.claim_id) {
+      throw new BadRequestException('A claim_id is required when listing documents.');
+    }
+    await this.assertClaimAccess(filter.claim_id, actor);
     return this.documentsRepository.findAll({
       page: filter.page,
       limit: filter.limit,
@@ -185,8 +319,97 @@ export class DocumentsService {
     return document;
   }
 
-  async createPreviewUrl(id: string) {
+  /**
+   * Resolve a document referenced by workflow/timeline metadata.  The browser
+   * must never guess a Storage path or substitute an unrelated file: this
+   * endpoint verifies ownership by claim_id before returning the document ID
+   * used for the signed preview URL.
+   */
+  async resolveClaimDocument(input: {
+    claimId: string;
+    documentId?: string;
+    fileName?: string;
+    category?: string;
+    actor: { id: string; hospitalId?: string | null; role?: string | null; permissions?: unknown; profileData?: unknown };
+  }) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.claimId)) {
+      throw new BadRequestException('A valid claim ID is required.');
+    }
+
+    await this.assertClaimAccess(input.claimId, input.actor);
+
+    if (input.documentId) {
+      const { data, error } = await this.databaseService.getClient()
+        .from('documents')
+        .select('*')
+        .eq('id', input.documentId)
+        .eq('claim_id', input.claimId)
+        .maybeSingle();
+      if (error) throw error;
+      if (data) return data;
+    }
+
+    const { data, error } = await this.databaseService.getClient()
+      .from('documents')
+      .select('*')
+      .eq('claim_id', input.claimId)
+      .order('uploaded_at', { ascending: false });
+    if (error) throw error;
+
+    const claimDocuments = data ?? [];
+    const requestedName = this.normaliseFileName(input.fileName);
+    const nameMatches = claimDocuments.filter((document: any) =>
+      this.normaliseFileName(document.file_name) === requestedName,
+    );
+    if (requestedName && nameMatches.length === 1) return nameMatches[0];
+    if (nameMatches.length > 1) {
+      throw new BadRequestException('More than one stored document matches this timeline entry.');
+    }
+
+    // Historic workflow entries did not persist a document ID. Their display
+    // label can differ from the uploaded file name, but the document category
+    // is still reliable (for example, "Discharge Summary"). Resolve that
+    // only when it identifies one and only one document belonging to this
+    // claim; never substitute a document from another claim.
+    const requestedCategory = this.normaliseFileName(input.category);
+    const categoryMatches = requestedCategory
+      ? claimDocuments.filter((document: any) =>
+          this.normaliseFileName(document.category) === requestedCategory,
+        )
+      : [];
+    if (categoryMatches.length === 1) return categoryMatches[0];
+    if (categoryMatches.length > 1) {
+      throw new BadRequestException('More than one stored document matches this timeline category.');
+    }
+
+    // A single stored document is unambiguous even if the legacy timeline
+    // contains only a generic label. This is intentionally limited to one
+    // claim-scoped record so it cannot expose or substitute another upload.
+    if (claimDocuments.length === 1) return claimDocuments[0];
+
+    throw new NotFoundException('The selected document is not available in the claim registry.');
+  }
+
+  private normaliseFileName(value?: string) {
+    return String(value ?? '')
+      .trim()
+      .toLocaleLowerCase()
+      .replace(/\.[a-z0-9]{1,8}$/i, '')
+      .replace(/[^a-z0-9]+/g, '');
+  }
+
+  private resolveMimeType(fileName: string, mimeType?: string) {
+    // Browser File/Blob objects reconstructed from legacy Base64 uploads can
+    // lose their MIME type. Preserve an explicit PDF type so Storage and
+    // every authorised browser can render it inline rather than download it.
+    if (/\.pdf$/i.test(fileName)) return 'application/pdf';
+    return mimeType || 'application/octet-stream';
+  }
+
+  async createPreviewUrl(id: string, actor: { id: string; hospitalId?: string | null; role?: string | null; permissions?: unknown; profileData?: unknown }) {
     const document = await this.findOne(id);
+    if (!document.claim_id) throw new BadRequestException('This document is not linked to a claim.');
+    await this.assertClaimAccess(document.claim_id, actor);
     const bucketPrefix = `${DocumentsService.claimDocumentsBucket}/`;
     if (!document.file_path?.startsWith(bucketPrefix)) {
       throw new BadRequestException('This document is not stored in the secure claim document bucket.');

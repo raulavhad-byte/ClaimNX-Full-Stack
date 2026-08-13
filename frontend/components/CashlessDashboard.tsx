@@ -60,7 +60,6 @@ import {
   ClaimStage,
   FormField,
   InsuranceEntity,
-  ROLE_STAGE_ENTITLEMENTS,
 } from "../types";
 import FollowUpEmailModal from "./FollowUpEmailModal";
 import { emailTemplateService } from "../services/emailTemplateService";
@@ -386,40 +385,22 @@ const CashlessDashboard: React.FC<CashlessDashboardProps> = ({
   const searchParams = new URLSearchParams(location.search);
   const targetProduct = searchParams.get('product');
 
-  // Check if a specific status is permitted under stage visibility roles
-  const isStatusPermitted = React.useCallback((status: string): boolean => {
-    const role = hospitalProfile?.role?.toUpperCase();
-    if (role === "SUPER ADMIN" || role === "ADMIN" || userPermissions.includes("all")) {
-      return true;
-    }
-    let stageKey: string | null = null;
-    for (const cat of ROLE_STAGE_ENTITLEMENTS) {
-      const found = cat.stages.find((s) => s.status === status);
-      if (found) {
-        stageKey = found.key;
-        break;
-      }
-    }
-    if (!stageKey) return true;
-    return userPermissions.includes(`stage_permissions:stage_${stageKey}:update`);
-  }, [userPermissions, hospitalProfile?.role]);
-
-  // Filter claims strictly by targetProduct if specified and permission visibility
+  // Claim reads are tenant/geography scoped by the backend. Stage permissions
+  // govern transitions only and must never hide otherwise-visible claims.
   const filteredClaimsByProduct = useMemo(() => {
     const list = targetProduct
       ? claims.filter((c) => c.product === targetProduct)
       : claims;
-    const permitted = list.filter((c) => isStatusPermitted(c.status));
-    
+
     // Deduplicate by ID to prevent duplicate React keys
     const seen = new Set<string>();
-    return permitted.filter((c) => {
+    return list.filter((c) => {
       if (!c.id) return true;
       if (seen.has(c.id)) return false;
       seen.add(c.id);
       return true;
     });
-  }, [claims, targetProduct, isStatusPermitted]);
+  }, [claims, targetProduct]);
 
   // Filter visible stages based on permissions
   const visibleStages = useMemo(() => {
@@ -462,11 +443,11 @@ const CashlessDashboard: React.FC<CashlessDashboardProps> = ({
       return {
         ...stage,
         statuses: stage.statuses.filter(
-          (status) => !EXCLUDED_STATUSES.includes(status) && isStatusPermitted(status),
+          (status) => !EXCLUDED_STATUSES.includes(status),
         ),
       };
     }).filter((stage) => stage.statuses.length > 0);
-  }, [stages, isStatusPermitted]);
+  }, [stages]);
 
   const isSuperPrivileged = useMemo(
     () =>
@@ -1721,28 +1702,6 @@ Sub-Limits: ${kyp.subLimits || "N/A"}
                         value={transitionClaims.length}
                         icon={Hash}
                         color="slate"
-                      />
-                    </>
-                  );
-                }
-
-                if (
-                  activeStatus === ClaimStatus.DISCHARGE_INITIATED ||
-                  (activeStage && activeStage.name.toLowerCase().includes("discharge"))
-                ) {
-                  return (
-                    <>
-                      <MetricCard
-                        label="Pending Disch."
-                        value={transitionClaims.length}
-                        icon={Hospital}
-                        color="amber"
-                      />
-                      <MetricCard
-                        label="Disch. Pipeline"
-                        value={`₹${transitionClaims.reduce((s, c) => s + Number(c.formData?.dis_total_bill || 0), 0).toLocaleString("en-IN")}`}
-                        icon={IndianRupee}
-                        color="emerald"
                       />
                     </>
                   );

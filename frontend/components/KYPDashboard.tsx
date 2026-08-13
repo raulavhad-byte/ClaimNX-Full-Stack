@@ -472,7 +472,6 @@ const KYPDashboard: React.FC<KYPDashboardProps> = ({
     });
 
     // Save policy state locally
-    dualStorageService.save('kyp_policies', updatedPolicy, updatedPolicy.id);
     
     // Also update main claims list for visibility in Reimbursement section
     if (onUpdateClaim) {

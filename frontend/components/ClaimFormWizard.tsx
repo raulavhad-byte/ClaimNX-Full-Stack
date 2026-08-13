@@ -94,7 +94,7 @@ import { jsPDF } from "jspdf";
 import html2canvas from "html2canvas";
 import { toast } from "sonner";
 import { isValidYearFormat, checkDateReasonability, formatDate, safeHtml2Canvas } from "../utils";
-import { documentsApi } from "../services/api";
+import { claimsApi, documentsApi } from "../services/api";
 
 interface ClaimFormWizardProps {
   fields: FormField[];
@@ -1867,17 +1867,44 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
     const persistedClaimId = String((persistedClaim as any)?.id || '');
 
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(persistedClaimId)) {
-      const uploads = await Promise.allSettled(
-        processedDocs.map((document) => documentsApi.uploadClaimFile({
-          claimId: persistedClaimId,
-          file: base64ToFile(document.data, document.name, document.mimeType),
-          category: document.type,
-        })),
-      );
-      const failedUploads = uploads.filter((upload) => upload.status === 'rejected');
-      if (failedUploads.length) {
-        console.error('Some claim documents could not be stored:', failedUploads);
-        toast.error(`${failedUploads.length} claim document(s) could not be stored.`);
+      // Upload serially.  Each backend call atomically stores the binary,
+      // creates its documents-table record, and appends the immutable ID to
+      // the claim timeline. Parallel uploads previously performed competing
+      // read/modify/write operations and could lose document links.
+      const uploadedDocuments: Array<Record<string, unknown>> = [];
+      for (const document of processedDocs) {
+        try {
+          const saved = await documentsApi.uploadClaimFile({
+            claimId: persistedClaimId,
+            file: base64ToFile(document.data, document.name, document.mimeType),
+            category: document.type,
+          });
+          if (!saved?.id) throw new Error('The document registry did not return an ID.');
+          uploadedDocuments.push({
+            documentId: saved.id,
+            name: saved.file_name || document.name,
+            type: saved.category || document.type,
+            mimeType: saved.mime_type || document.mimeType,
+            uploadedAt: saved.uploaded_at || saved.created_at || new Date().toISOString(),
+            fileSize: saved.file_size,
+          });
+        } catch (error) {
+          console.error('Claim document upload failed:', document.name, error);
+          toast.error(`Claim saved, but "${document.name}" could not be stored. Please retry that upload.`);
+          break;
+        }
+      }
+
+      // Do not PATCH the whole claim here. The backend has already linked
+      // every successful upload. A stale browser PATCH can overwrite those
+      // links and make real files appear as the generated pre-auth form.
+      if (uploadedDocuments.length) {
+        Object.assign(persistedClaim as object, {
+          formData: {
+            ...(persistedClaim as Claim).formData,
+            uploadedDocuments,
+          },
+        });
       }
     } else {
       console.warn('Claim was not persisted to the backend; skipping document upload.');

@@ -229,11 +229,7 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
       // Update state
       setKypPolicies(prev => prev.map(p => p.id === patientKyp.id ? updatedPolicy : p));
       
-      // Update dual storage
-      await dualStorageService.save('kyp_policies', {
-        status: newStatus,
-        lastUpdatedDate: new Date().toISOString()
-      }, patientKyp.id);
+      // KYP policy state is persisted with the claim through the API.
       
       // If linked to a claim, we could update the claim status too if needed
       const linkedClaim = claims.find(c => c.id === patientKyp.claimId);
@@ -373,30 +369,26 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
     return null;
   };
 
-  const isStageEventVisible = (status: string): boolean => {
-    const stageKey = getStageKeyByStatus(status);
-    if (!stageKey) return true;
-    return canAccess(`stage_permissions:stage_${stageKey}:update`);
-  };
-
-  const viewableStages = useMemo(() => {
-    return ROLE_STAGE_ENTITLEMENTS.flatMap(cat => 
-      cat.stages.filter(stage => {
-        return canAccess(`stage_permissions:stage_${stage.key}:update`);
-      }).map(stage => ({
+  // Stage permissions govern mutations only. A user who can open this
+  // tenant-scoped dashboard must still be able to read the complete history.
+  const configuredStages = useMemo(() => {
+    return ROLE_STAGE_ENTITLEMENTS.flatMap(cat =>
+      cat.stages.map(stage => ({
         ...stage,
         category: cat.category
       }))
     );
-  }, [canAccess]);
+  }, []);
 
   const handleStageUpdateSubmit = async () => {
     if (!latestClaim || !selectedStageKey) return;
     
-    const selectedStageObj = viewableStages.find(s => s.key === selectedStageKey);
+    const selectedStageObj = configuredStages.find(s => s.key === selectedStageKey);
     if (!selectedStageObj) return;
 
-    const hasUpdate = canAccess(`stage_permissions:stage_${selectedStageKey}:update`);
+    const currentStageKey = getStageKeyByStatus(latestClaim.status);
+    const hasUpdate = currentStageKey === null ||
+      canAccess(`stage_permissions:stage_${currentStageKey}:update`);
     if (!hasUpdate) {
       toast.error("Unauthorized: You do not have permission to update this stage");
       return;
@@ -997,18 +989,7 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
         // Also update the KYP policy status back to 'Pending (KYP)' to flow back to CRM Pending bucket
         const targetPolicy = kypPolicies.find(p => p.claimId === selectedClaimForReply.id);
         if (targetPolicy && targetPolicy.id) {
-          try {
-            await dualStorageService.save('kyp_policies', {
-              status: 'Pending (KYP)',
-              lastUpdatedDate: new Date().toISOString(),
-              remarks: `[CRM Query Reply ${replyTransactionDate}] ${replyComment.substring(0, 100)}${replyComment.length > 100 ? '...' : ''}`,
-              isAccepted: false,
-              assignedUserId: null,
-              assignedUserName: null
-            }, targetPolicy.id);
-          } catch (err) {
-            console.error("Error updating KYP policy:", err);
-          }
+          // The linked claim is the source of truth for this status update.
         }
 
         setKypPolicies(prev => prev.map(p => {
@@ -2087,8 +2068,7 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
                           {claim.history
                             .filter(event => {
                               const isProductAllowed = !(claim.product === Product.RECOVERY_RECONCILIATION && (event.status === ClaimStatus.SETTLED || event.status === ClaimStatus.COMPLETE_SETTLEMENT));
-                              const isStageAllowed = isStageEventVisible(event.status);
-                              return isProductAllowed && isStageAllowed;
+                              return isProductAllowed;
                             })
                             .map((event, idx) => (
                             <div key={event.id} className="relative pl-8">

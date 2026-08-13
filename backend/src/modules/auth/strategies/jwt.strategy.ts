@@ -232,6 +232,12 @@ export class JwtStrategy extends PassportStrategy(
       hospitalId:
         user.hospital_id,
 
+      // Scope data is loaded from the server on every authenticated request.
+      // Controllers must never trust browser localStorage for tenant or
+      // geographical access decisions.
+      entityType: user.entity_type,
+      profileData: user.profile_data ?? {},
+
       status: user.status,
     };
   }

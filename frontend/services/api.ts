@@ -430,7 +430,10 @@ function toPortalClaim(claim: any): any {
   return {
     ...claim,
     id: claim?.id ?? '',
-    caseReferenceId: claim?.caseReferenceId ?? claim?.case_ref_id ?? claim?.claim_number ?? '',
+    // claim_number is the server-allocated, user-facing identifier. Keep the
+    // UUID-shaped case_ref_id only as a legacy fallback for old records.
+    caseReferenceId: claim?.caseReferenceId ?? claim?.claimNumber ?? claim?.claim_number ?? claim?.case_ref_id ?? '',
+    claimNumber: claim?.claimNumber ?? claim?.claim_number ?? '',
     patientId: claim?.patientId ?? claim?.patient_id ?? '',
     patientName: claim?.patientName ?? formData?.p_name ?? formData?.patient_name ?? 'Unknown Patient',
     hospitalId: claim?.hospitalId ?? claim?.hospital_id ?? formData?.hospitalId ?? '',
@@ -439,6 +442,8 @@ function toPortalClaim(claim: any): any {
     policyNumber: claim?.policyNumber ?? formData?.p_policy_no ?? formData?.policyNumber ?? '',
     estimatedCost: Number(claim?.estimatedCost ?? claim?.estimated_cost ?? claim?.amount ?? 0),
     admissionDate: claim?.admissionDate ?? claim?.admission_date ?? '',
+    createdAt: claim?.createdAt ?? claim?.created_at ?? '',
+    updatedAt: claim?.updatedAt ?? claim?.updated_at ?? '',
     claimType: claim?.claimType ?? formData?.claimType ?? 'Cashless',
     product,
     status: databaseClaimStatusMap[status] ?? claim?.status ?? 'Draft',
@@ -484,70 +489,51 @@ export const claimsApi = {
     if (hospitalId && !isUuid(hospitalId)) return { data: [] };
     const query = hospitalId ? `?hospital_id=${encodeURIComponent(hospitalId)}` : '';
     return {
-      data: collectionFrom(
-        await safe(request(`/claims${query}`), localArray('claimnx_claims')),
-        localArray('claimnx_claims'),
-      ).map(toPortalClaim),
+      data: collectionFrom(await request(`/claims${query}`), []).map(toPortalClaim),
     };
   },
   create: async (claim: any) => {
-    const current = localArray('claimnx_claims');
-    saveLocal('claimnx_claims', [...current, claim]);
-    return { data: (await safe(request('/claims', { method: 'POST', body: JSON.stringify(claimRequestPayload(claim)) }), claim)) || claim };
+    // Claims are system-of-record data. Do not write a browser copy before
+    // the API succeeds; otherwise a failed request can look like a saved
+    // claim and can never be seen by another user.
+    return { data: await request('/claims', { method: 'POST', body: JSON.stringify(claimRequestPayload(claim)) }) };
   },
   update: async (id: string, claim: any) => {
-    const updated = localArray('claimnx_claims').map((item) => item.id === id ? claim : item);
-    saveLocal('claimnx_claims', updated);
     return {
-      data: toPortalClaim(
-        (await safe(
-          request(`/claims/${encodeURIComponent(id)}`, {
-            method: 'PATCH',
-            body: JSON.stringify(claimUpdatePayload(claim)),
-          }),
-          claim,
-        )) || claim,
-      ),
+      data: toPortalClaim(await request(`/claims/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(claimUpdatePayload(claim)),
+      })),
     };
   },
   delete: async (id: string) => {
-    saveLocal('claimnx_claims', localArray('claimnx_claims').filter((item) => item.id !== id));
-    return safe(request(`/claims/${encodeURIComponent(id)}`, { method: 'DELETE' }), null);
+    return request(`/claims/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
-  deleteAll: async () => { saveLocal('claimnx_claims', []); return safe(request('/claims', { method: 'DELETE' }), null); },
+  deleteAll: async () => request('/claims', { method: 'DELETE' }),
 };
 
 const usersResource = createLegacyResource('/users');
 export const usersApi = {
   ...usersResource,
   getAll: async () => ({
-    data: collectionFrom(
-      await safe(request('/users'), localArray('claimnx_hospital_users')),
-      localArray('claimnx_hospital_users'),
-    ).map(toPortalUser),
+    data: collectionFrom(await request('/users'), []).map(toPortalUser),
   }),
   create: async (user: any) => {
     const created = toPortalUser(await request('/users', {
       method: 'POST',
       body: JSON.stringify(toUserRequestPayload(user, true)),
     }));
-    const portalUser = { ...user, ...created, password: undefined };
-    saveLocal('claimnx_hospital_users', [...localArray('claimnx_hospital_users'), portalUser]);
-    return { data: portalUser };
+    return { data: { ...user, ...created, password: undefined } };
   },
   update: async (id: string, user: any) => {
     const updated = toPortalUser(await request(`/users/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(toUserRequestPayload(user, false)),
     }));
-    const portalUser = { ...user, ...updated, password: undefined };
-    const all = localArray('claimnx_hospital_users').map((item) => item.id === id ? portalUser : item);
-    saveLocal('claimnx_hospital_users', all);
-    return { data: portalUser };
+    return { data: { ...user, ...updated, password: undefined } };
   },
   delete: async (id: string) => {
     await request(`/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    saveLocal('claimnx_hospital_users', localArray('claimnx_hospital_users').filter((item) => item.id !== id));
     return { data: null };
   },
   sync: async (user: any) => ({ data: user }),
@@ -624,9 +610,26 @@ export const documentsApi = {
   },
   listClaimDocuments: async (claimId: string) => {
     const result = await request(`/documents?claim_id=${encodeURIComponent(claimId)}&limit=100`);
-    return Array.isArray(result) ? result : (result?.data ?? []);
-  },
-  previewClaimDocument: async (documentId: string) =>
+      return Array.isArray(result) ? result : (result?.data ?? []);
+    },
+    resolveClaimDocument: async ({
+      claimId,
+      documentId,
+      fileName,
+      category,
+    }: {
+      claimId: string;
+      documentId?: string;
+      fileName?: string;
+      category?: string;
+    }) => {
+      const query = new URLSearchParams();
+      if (documentId) query.set('document_id', documentId);
+      if (fileName) query.set('file_name', fileName);
+      if (category) query.set('category', category);
+      return request(`/documents/claim/${encodeURIComponent(claimId)}/resolve?${query.toString()}`);
+    },
+    previewClaimDocument: async (documentId: string) =>
     request(`/documents/${encodeURIComponent(documentId)}/preview`),
   uploadHospitalRateList: async ({
     hospitalUserId,

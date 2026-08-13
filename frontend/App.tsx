@@ -759,9 +759,9 @@ const GlobalSearch = ({
           case 'Patient Name':
             return c.patientName.toLowerCase().includes(searchTerm);
           case 'Case ID':
-            return (c.id || '').toLowerCase().includes(searchTerm);
+            return (c.caseReferenceId || c.claimNumber || '').toLowerCase().includes(searchTerm);
           case 'Claim No':
-            return (c.formData?.insurer_claim_no || '').toLowerCase().includes(searchTerm);
+            return (c.formData?.insurer_claim_no || c.claimNumber || '').toLowerCase().includes(searchTerm);
           case 'UHID':
             return (c.formData?.p_uhid || '').toLowerCase().includes(searchTerm);
           case 'Policy No':
@@ -1150,22 +1150,11 @@ const AppContent: React.FC = () => {
     }
   });
 
-  const [hospitalUsers, setHospitalUsers] = useState<HospitalUser[]>(() => {
-    try {
-      const saved = localStorage.getItem('claimnx_hospital_users');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
-    }
-  });
-  const [claims, setClaims] = useState<Claim[]>(() => {
-    try {
-      const saved = localStorage.getItem('claimnx_claims');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
-    }
-  });
+  // Business data is loaded from the API/Supabase only. Browser storage is
+  // not a fallback for users or claims because it makes records appear saved
+  // to one browser while remaining invisible to every other user.
+  const [hospitalUsers, setHospitalUsers] = useState<HospitalUser[]>([]);
+  const [claims, setClaims] = useState<Claim[]>([]);
   const [queries, setQueries] = useState<Query[]>([]);
   const [recoveries, setRecoveries] = useState<RecoveryRecord[]>([]);
   const [reconciliations, setReconciliations] = useState<ReconciliationRecord[]>([]);
@@ -1474,7 +1463,8 @@ const AppContent: React.FC = () => {
 
   const visibleUsersList = useMemo(() => {
     const roleUpper = hospitalProfile.role?.toUpperCase();
-    if (['SUPER ADMIN', 'OPERATIONS', 'SALES', 'RECONCILIATION TEAM', 'MEDICAL UNDERWRITING', 'MEDICAL OFFICER', 'MEDICAL TEAM', 'DOCTOR', 'CONSULTANT', 'POLICY AUDIT TEAM', 'POLICY AUDIT TEAM ROLE', 'CRM TEAM'].includes(roleUpper || '')) {
+    const isCentralClinicalRole = roleUpper?.includes('MEDICAL') || roleUpper?.includes('CLINICAL');
+    if (['SUPER ADMIN', 'OPERATIONS', 'SALES', 'RECONCILIATION TEAM', 'MEDICAL UNDERWRITING', 'MEDICAL OFFICER', 'MEDICAL TEAM', 'DOCTOR', 'CONSULTANT', 'POLICY AUDIT TEAM', 'POLICY AUDIT TEAM ROLE', 'CRM TEAM'].includes(roleUpper || '') || isCentralClinicalRole) {
        return hospitalUsers;
     }
     const myScopeId = getScopeId(hospitalProfile);
@@ -1512,9 +1502,32 @@ const AppContent: React.FC = () => {
     });
   };
 
+  const handlePersistUserProfile = async (updatedUser: HospitalUser): Promise<void> => {
+    if (!updatedUser.id) {
+      throw new Error('Your profile is not linked to a saved user account.');
+    }
+
+    const response = await usersApi.update(updatedUser.id, updatedUser);
+    const persistedUser = {
+      ...updatedUser,
+      ...response.data,
+      password: undefined,
+    } as HospitalUser;
+
+    setHospitalProfile(persistedUser);
+    setHospitalUsers((currentUsers) => currentUsers.map((currentUser) =>
+      currentUser.id === persistedUser.id
+        ? { ...currentUser, ...persistedUser }
+        : currentUser,
+    ));
+  };
+
   const visibleHospitals = useMemo(() => {
     // Filter to show ONLY Hospitals (exclude Users and Partners)
     const onlyHospitals = visibleUsersList.filter(u => (u.entityType || (u.isAdmin ? 'Hospital' : 'User')) === 'Hospital');
+    const normaliseLocation = (value?: string) => String(value || '').trim().toLocaleLowerCase();
+    const isInLocationScope = (allowed: string[] | undefined, actual?: string) =>
+      !allowed?.length || allowed.some(value => normaliseLocation(value) === normaliseLocation(actual));
 
     const roleUpper = hospitalProfile.role?.toUpperCase();
     if (roleUpper === 'SUPER ADMIN') return onlyHospitals;
@@ -1536,16 +1549,9 @@ const AppContent: React.FC = () => {
             
             // If they have location mapping, filter by location
             if (hasLocationMapping) {
-                if (hospitalProfile.zones && hospitalProfile.zones.length > 0) {
-                    if (!h.zone || !hospitalProfile.zones.includes(h.zone)) return false;
-                }
-                if (hospitalProfile.states && hospitalProfile.states.length > 0) {
-                    if (!h.state || !hospitalProfile.states.includes(h.state)) return false;
-                }
-                if (hospitalProfile.districts && hospitalProfile.districts.length > 0) {
-                    if (!h.district || !hospitalProfile.districts.includes(h.district)) return false;
-                }
-                return true;
+                return isInLocationScope(hospitalProfile.zones, h.zone) &&
+                  isInLocationScope(hospitalProfile.states, h.state) &&
+                  isInLocationScope(hospitalProfile.districts, h.district);
             }
             
             // For general central users without specific restrictions, allow all
@@ -1611,14 +1617,11 @@ const AppContent: React.FC = () => {
       dualStorageService.safeSetItem('claimnx_config', JSON.stringify(dualStorageService.stripLargeFields(systemConfig)));
       localStorage.setItem('claimnx_auth', isAuthenticated ? 'true' : 'false');
       dualStorageService.safeSetItem('claimnx_hospital', JSON.stringify(dualStorageService.stripLargeFields(hospitalProfile)));
-      dualStorageService.safeSetItem('claimnx_hospital_users', JSON.stringify(dualStorageService.stripLargeFields(hospitalUsers)));
-      dualStorageService.safeSetItem('claimnx_claims', JSON.stringify(dualStorageService.stripLargeFields(claims)));
       dualStorageService.safeSetItem('claimnx_roles', JSON.stringify(dualStorageService.stripLargeFields(roles)));
-      dualStorageService.safeSetItem('claimnx_kyp_policies', JSON.stringify(dualStorageService.stripLargeFields(kypPolicies)));
     } catch (e) {
       console.error("Local storage error:", e);
     }
-  }, [systemConfig, isAuthenticated, hospitalProfile, hospitalUsers, claims, roles, kypPolicies]);
+  }, [systemConfig, isAuthenticated, hospitalProfile, roles]);
 
   // Handle sidebar and dropdowns
   useEffect(() => {
@@ -1660,6 +1663,21 @@ const AppContent: React.FC = () => {
 
   const visibleClaims = useMemo(() => {
     const roleUpper = hospitalProfile.role?.toUpperCase();
+    const normalizedRole = hospitalProfile.role?.trim().toLowerCase().replace(/\s+role$/i, '');
+    const assignedRole = roles.find((role) =>
+      String(role.name ?? '').trim().toLowerCase().replace(/\s+role$/i, '') === normalizedRole,
+    );
+    const effectivePermissions = Array.isArray(hospitalProfile.permissions)
+      ? hospitalProfile.permissions
+      : assignedRole?.permissions ?? [];
+    const isFinanceRole = /FINANCE|ACCOUNT|RECONCILIATION/.test(roleUpper || '') ||
+      effectivePermissions.some((permission) => /recon|finance|account/i.test(String(permission)));
+
+    // Claims are already scoped by the backend to the authenticated user.
+    // Finance must retain all of those authorised claims; applying the older
+    // browser-side product/location filter here can hide discharge-approved
+    // work before it reaches the reconciliation queue.
+    if (isFinanceRole) return claims;
     
     // PRODUCT-BASED DATA ISOLATION (Point 1 of requirement)
     let baseFiltered;
@@ -1675,13 +1693,12 @@ const AppContent: React.FC = () => {
         baseFiltered = claims.filter(c => assignedIds.includes(c.formData?.hospitalId || c.hospitalId || ''));
     } else if (roleUpper && !roleUpper.startsWith('HOSPITAL') && hospitalProfile.role !== 'Hospital') {
         // Central roles (Admin, Medical Team, Policy Audit Team, CRM Team, Operations, Sales, Reconciliation, etc.)
-        const allowedHospitalIds = visibleHospitals.map(h => h.id);
-        // Normal operational users may not have users.view permission, so the
-        // hospital directory is intentionally unavailable to their browser.
-        // Keep the pool here and enforce their product/location boundaries
-        // below from the claim's persisted hospital snapshot.
-        baseFiltered = allowedHospitalIds.length > 0
-          ? claims.filter(c => allowedHospitalIds.includes(c.formData?.hospitalId || c.hospitalId || ''))
+        const assignedHospitalIds = hospitalProfile.assignedHospitalIds || [];
+        // Do not depend on the optional hospital directory to populate an
+        // operational queue. Claims retain their hospital/location snapshot,
+        // which is the reliable source used by the scope checks below.
+        baseFiltered = assignedHospitalIds.length > 0
+          ? claims.filter(c => assignedHospitalIds.includes(c.formData?.hospitalId || c.hospitalId || ''))
           : claims;
     } else {
       const myScopeId = getScopeId(hospitalProfile);
@@ -1697,6 +1714,9 @@ const AppContent: React.FC = () => {
       const userStates = hospitalProfile.states || [];
       const userDistricts = hospitalProfile.districts || [];
       const hasLocationFilter = userZones.length > 0 || userStates.length > 0 || userDistricts.length > 0;
+      const normaliseLocation = (value?: string) => String(value || '').trim().toLocaleLowerCase();
+      const isInLocationScope = (allowed: string[], actual?: string) =>
+        allowed.length === 0 || allowed.some(value => normaliseLocation(value) === normaliseLocation(actual));
 
       return baseFiltered.filter(c => {
         // 1. PRODUCT FILTER
@@ -1721,19 +1741,13 @@ const AppContent: React.FC = () => {
         if (hasLocationFilter) {
           const claimHospId = c.formData?.hospitalId || c.hospitalId || '';
           const hosp = hospitalUsers.find(u => u.id === claimHospId);
-          const claimZone = hosp?.zone || c.formData?.hosp_zone || '';
-          const claimState = hosp?.state || c.formData?.hosp_state || c.formData?.p_state || '';
-          const claimDistrict = hosp?.district || c.formData?.hosp_district || c.formData?.p_district || '';
+          const claimZone = hosp?.zone || c.formData?.hosp_zone || c.formData?.hospitalZone || c.formData?.hospital_zone || c.formData?.zone || c.formData?.hospital?.zone || '';
+          const claimState = hosp?.state || c.formData?.hosp_state || c.formData?.hospitalState || c.formData?.hospital_state || c.formData?.p_state || c.formData?.state || c.formData?.hospital?.state || '';
+          const claimDistrict = hosp?.district || c.formData?.hosp_district || c.formData?.hospitalDistrict || c.formData?.hospital_district || c.formData?.p_district || c.formData?.district || c.formData?.city || c.formData?.hospital?.district || c.formData?.hospital?.city || '';
 
-          if (userZones.length > 0) {
-            if (!claimZone || !userZones.includes(claimZone)) return false;
-          }
-          if (userStates.length > 0) {
-            if (!claimState || !userStates.includes(claimState)) return false;
-          }
-          if (userDistricts.length > 0) {
-            if (!claimDistrict || !userDistricts.includes(claimDistrict)) return false;
-          }
+          if (!isInLocationScope(userZones, claimZone) ||
+              !isInLocationScope(userStates, claimState) ||
+              !isInLocationScope(userDistricts, claimDistrict)) return false;
         }
 
         return true;
@@ -1741,7 +1755,7 @@ const AppContent: React.FC = () => {
     }
 
     return baseFiltered;
-  }, [claims, hospitalProfile, visibleHospitals, hospitalUsers, roles]);
+  }, [claims, hospitalProfile, hospitalUsers, roles]);
 
   const cashlessClaims = useMemo(() => {
     return visibleClaims.filter(c => {
@@ -2429,6 +2443,7 @@ const AppContent: React.FC = () => {
         ...claim,
         id: res.data?.id ?? finalId,
         caseReferenceId: res.data?.claim_number ?? res.data?.case_ref_id ?? finalId,
+        claimNumber: res.data?.claim_number ?? '',
         patientId,
         hospitalId: persistedHospitalId,
         formData: {
@@ -2486,7 +2501,6 @@ const AppContent: React.FC = () => {
           ]
         };
         setKypPolicies(prev => [newPolicy, ...prev.filter(p => p.claimId !== newClaim.id)]);
-        dualStorageService.save('kyp_policies', newPolicy, newPolicy.id);
       }
       
       toast.success("Claim created successfully");
@@ -2525,6 +2539,7 @@ const AppContent: React.FC = () => {
       }
       
       toast.success("Claim updated");
+      return res.data;
     } catch (error: any) {
       console.error("Error updating claim:", error);
       toast.error(error.response?.data?.message || "Failed to update claim on server");
@@ -2924,7 +2939,16 @@ const AppContent: React.FC = () => {
                                <Mail size={12} className="mr-2 text-slate-300" /> <span className="truncate">{hospitalProfile.emailId}</span>
                             </div>
                             <div className="flex items-center text-[10px] font-bold text-slate-500 bg-white p-2 rounded-xl border border-slate-100">
-                               <Hospital size={12} className="mr-2 text-slate-300" /> <span className="truncate">{hospitalProfile.hospitalName}</span>
+                               {hospitalProfile.entityType === 'Hospital' || hospitalProfile.role?.toUpperCase().startsWith('HOSPITAL') ? (
+                                 <Hospital size={12} className="mr-2 text-slate-300" />
+                               ) : (
+                                 <BriefcaseMedical size={12} className="mr-2 text-slate-300" />
+                               )}
+                               <span className="truncate">
+                                 {hospitalProfile.entityType === 'Hospital' || hospitalProfile.role?.toUpperCase().startsWith('HOSPITAL')
+                                   ? hospitalProfile.hospitalName
+                                   : hospitalProfile.designation || hospitalProfile.department || hospitalProfile.role}
+                               </span>
                             </div>
                         </div>
                     </div>
@@ -2981,7 +3005,7 @@ const AppContent: React.FC = () => {
                 }
                 setHospitalUsers((prev) => prev.map((u) => u.id === updatedHospital.id ? updatedHospital : u));
               }} insurers={insurers} tpas={tpas} currentUser={hospitalProfile} /> : <Navigate to="/" replace />} />
-              <Route path="/reconciliation-dashboard" element={canAccess('recon_dashboard') ? <ReconciliationDashboard claims={cashlessClaims} hospitals={visibleHospitals} currentUser={hospitalProfile} users={hospitalUsers} onUpdateClaim={handleUpdateClaim} insurers={insurers} tpas={tpas} permissions={currentUserPermissions} /> : <Navigate to="/" replace />} />
+              <Route path="/reconciliation-dashboard" element={canAccess('recon_dashboard') ? <ReconciliationDashboard claims={visibleClaims} hospitals={visibleHospitals} currentUser={hospitalProfile} users={hospitalUsers} onUpdateClaim={handleUpdateClaim} insurers={insurers} tpas={tpas} permissions={currentUserPermissions} /> : <Navigate to="/" replace />} />
               <Route path="/new-claim" element={
                   canAccess('nav_claims') || canAccess('edit_claims') 
                   ? <ClaimFormWizard 
@@ -3015,7 +3039,7 @@ const AppContent: React.FC = () => {
                     /> 
                   : <Navigate to="/" replace />
               } />
-              <Route path="/process-claim/:id" element={canAccess('claim_directory') || canAccess('claims_view') || canAccess('medical_underwriting') || canAccess('nav_medical') || canAccess('nav_crm') ? <ClaimProcessCenter claims={visibleClaims} onUpdate={handleUpdateClaim} onUpdateHospital={setHospitalProfile} stages={stages} fields={fields} userRole={hospitalProfile.role} roles={roles} hospitalProfile={hospitalProfile} kypPolicies={kypPolicies} permissions={currentUserPermissions} canAccessStageAction={canAccessStageAction} canViewMedicalClaim={canAccess('medical_underwriting') || canAccess('nav_medical')} canViewCrmClaim={canAccess('nav_crm')} /> : <Navigate to="/" replace />} />
+              <Route path="/process-claim/:id" element={canAccess('claim_directory') || canAccess('claims_view') || canAccess('medical_underwriting') || canAccess('nav_medical') || canAccess('nav_crm') || canAccess('recon_dashboard') || canAccess('reconciliation_dashboard') ? <ClaimProcessCenter claims={visibleClaims} onUpdate={handleUpdateClaim} onUpdateHospital={setHospitalProfile} stages={stages} fields={fields} userRole={hospitalProfile.role} roles={roles} hospitalProfile={hospitalProfile} kypPolicies={kypPolicies} permissions={currentUserPermissions} canAccessStageAction={canAccessStageAction} canViewMedicalClaim={canAccess('medical_underwriting') || canAccess('nav_medical')} canViewCrmClaim={canAccess('nav_crm')} canViewReconClaim={canAccess('recon_dashboard') || canAccess('reconciliation_dashboard')} /> : <Navigate to="/" replace />} />
               <Route path="/patient-dashboard/:patientName" element={<PatientDashboard claims={visibleClaims} kypPolicies={kypPolicies} setKypPolicies={setKypPolicies} onUpdateClaim={handleUpdateClaim} hospitalProfile={hospitalProfile} setProfileInitialTab={setProfileInitialTab} setShowProfileModule={setShowProfileModule} canAccess={canAccess} insurers={insurers} tpas={tpas} />} />
               <Route path="/manage-claims" element={canAccess('claim_directory') ? <ManageClaims claims={cashlessClaims} stages={stages} setClaims={setClaims} insurers={insurers} tpas={tpas} permissions={currentUserPermissions} /> : <Navigate to="/" replace />} />
               <Route path="/manage-hospital" element={isHospitalManageAllowed ? <ManageHospital user={hospitalProfile} onUpdate={setHospitalProfile} insurers={insurers} tpas={tpas} setInsurers={setInsurers} setTpas={setTpas} users={visibleUsersList} setUsers={handleSetHospitalUsers} roles={roles} permissions={currentUserPermissions} /> : <Navigate to="/" replace />} />
@@ -3062,7 +3086,7 @@ const AppContent: React.FC = () => {
           {showProfileModule && (
             <UserProfile 
               user={hospitalProfile} 
-              onUpdate={setHospitalProfile} 
+              onUpdate={handlePersistUserProfile} 
               claims={claims} 
               allUsers={hospitalUsers}
               initialTab={profileInitialTab}

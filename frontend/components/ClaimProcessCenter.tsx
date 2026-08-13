@@ -14,7 +14,9 @@ import {
   HospitalUser,
   KYPPolicy,
   Product,
+  ROLE_STAGE_ENTITLEMENTS,
 } from "../types";
+
 import { emailTemplateService } from "../services/emailTemplateService";
 import {
   ArrowLeft,
@@ -50,7 +52,6 @@ import {
   Plus,
   XCircle,
   RefreshCw,
-  Lock,
   Calendar,
   IndianRupee,
 } from "lucide-react";
@@ -90,7 +91,7 @@ import VidalHealthTemplate from "./VidalHealthTemplate";
 
 interface ClaimProcessCenterProps {
   claims: Claim[];
-  onUpdate: (claim: Claim) => void;
+  onUpdate: (claim: Claim) => Promise<Claim | void>;
   onUpdateHospital?: (hospital: HospitalUser) => void;
   stages: ClaimStage[];
   fields: FormField[];
@@ -102,6 +103,7 @@ interface ClaimProcessCenterProps {
   canAccessStageAction?: (stageKey: string, action: string) => boolean;
   canViewMedicalClaim?: boolean;
   canViewCrmClaim?: boolean;
+  canViewReconClaim?: boolean;
 }
 
 const NATIONAL_INSURERS = [
@@ -561,6 +563,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
   canAccessStageAction,
   canViewMedicalClaim = false,
   canViewCrmClaim = false,
+  canViewReconClaim = false,
 }) => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -642,53 +645,18 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
     return stages.find((s) => s.statuses.includes(claim.status));
   }, [claim?.status, stages]);
 
-  const currentStageKey = currentStage?.key || "unknown";
-
-  const isViewAllowed = useMemo(() => {
-    if (!currentStageKey || currentStageKey === "unknown") return true;
-    const role = hospitalProfile?.role?.toUpperCase();
-    if (role === 'SUPER ADMIN' || role === 'ADMIN' || (permissions && permissions.includes('all'))) return true;
-    // Review teams open this shared dashboard in their scoped work context.
-    // Viewing an already scoped claim must not require update access to the
-    // claim's originating cashless stage; update actions remain protected by
-    // canAccessStageAction below.
-    if ((source === 'medical' && canViewMedicalClaim) || (source === 'crm' && canViewCrmClaim)) return true;
-    return permissions && permissions.includes(`stage_permissions:stage_${currentStageKey}:update`);
-  }, [currentStageKey, hospitalProfile?.role, permissions, source, canViewMedicalClaim, canViewCrmClaim]);
-
-  if (claim && !isViewAllowed) {
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-6">
-        <div className="w-24 h-24 bg-rose-50 rounded-full flex items-center justify-center text-rose-500 shadow-xl shadow-rose-900/10 animate-bounce">
-          <Lock size={48} />
-        </div>
-        <div className="space-y-2">
-          <h2 className="text-3xl font-black text-slate-800 uppercase tracking-tighter">
-            Access Restricted
-          </h2>
-          <p className="text-slate-500 font-bold max-w-md mx-auto leading-relaxed">
-            Your assigned role does not have permission to view cases in the{" "}
-            <span className="text-[#000080] font-black">
-              {currentStage?.name || "Current"}
-            </span>{" "}
-            stage.
-          </p>
-        </div>
-        <button
-          onClick={() => navigate(-1)}
-          className="px-8 py-3 bg-slate-900 text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2"
-        >
-          <ArrowLeft size={16} /> Go Back
-        </button>
-      </div>
-    );
-  }
+  const configuredStageEntitlement = ROLE_STAGE_ENTITLEMENTS
+    .flatMap((category) => category.stages)
+    .find((stage) => stage.status === claim?.status);
+  const currentStageKey = configuredStageEntitlement?.key || currentStage?.key || "unknown";
 
   const nextStageButtons = useMemo(() => {
-    if (!claim || !canAccessStageAction) return [];
+    if (!claim) return [];
+    if (!canAccessStageAction) return [];
 
-    // 1. Check if user has overall 'move' permission for this stage
-    if (!canAccessStageAction(currentStageKey, "move")) return [];
+    // Stage visibility controls mutation only. Read access to the patient
+    // dashboard, documents, and timeline is handled independently.
+    if (!canAccessStageAction(currentStageKey, "update")) return [];
 
     // Check if cashless claim is in a query reply status and medical scrutiny is required (enabled)
     const isQueryReplyScrutiny = [
@@ -713,27 +681,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
 
     const options = getNextStatusOptions(claim, hospitalProfile);
 
-    return options.filter((opt) => {
-      if (opt === "REOPEN CASE") return true;
-
-      // 2. Further refine based on target status (e.g. Approve or Query)
-      if (
-        opt === ClaimStatus.CLAIM_APPROVED ||
-        opt === ClaimStatus.COMPLETE_SETTLEMENT
-      ) {
-        return canAccessStageAction(currentStageKey, "approve");
-      }
-
-      if (
-        opt === ClaimStatus.CLAIM_UNDER_QUERY ||
-        opt === ClaimStatus.HOSPITAL_QUERY_PENDING ||
-        opt === ClaimStatus.MEDICAL_QUERY_RAISED
-      ) {
-        return canAccessStageAction(currentStageKey, "query");
-      }
-
-      return true;
-    });
+    return options;
   }, [claim?.status, currentStageKey, canAccessStageAction]);
 
   // Handle Today's date initialization when modal opens
@@ -1123,32 +1071,48 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
     type?: string;
     documentId?: string;
   }) => {
-    if (document.data) {
-      handlePreview(document.name, document.data, document.mimeType || document.type || "application/pdf");
-      return;
-    }
-
     try {
-      const storedDocuments = await documentsApi.listClaimDocuments(claim.id);
-      const normalizedName = document.name.trim().toLowerCase();
-      const storedDocument = storedDocuments.find((item: any) =>
-        (document.documentId && String(item.id) === String(document.documentId)) ||
-        String(item.file_name || item.name || "").trim().toLowerCase() === normalizedName,
-      ) || storedDocuments[0];
-
-      if (!storedDocument) {
-        toast.info("No uploaded documents are available for this claim.");
+      // A registry ID always wins over any historic inline preview payload.
+      // This prevents a generated pre-auth payload from being displayed in
+      // place of the uploaded document after a workflow transition.
+      if (!document.documentId && document.data) {
+        handlePreview(document.name, document.data, document.mimeType || document.type || "application/pdf");
         return;
       }
+      const storedDocument = await documentsApi.resolveClaimDocument({
+        claimId: claim.id,
+        documentId: document.documentId,
+        fileName: document.name,
+        category: document.type,
+      });
 
       const preview = await documentsApi.previewClaimDocument(String(storedDocument.id));
       const previewUrl = preview?.preview_url || preview?.data?.preview_url;
       if (!previewUrl) throw new Error("Preview URL was not returned");
 
+      // Do not assign the signed Storage URL directly to an iframe. Depending
+      // on browser and object metadata, that navigation can be treated as a
+      // download. Fetching it first preserves the authenticated response and
+      // creates an explicit in-browser preview URL.
+      const previewResponse = await fetch(previewUrl);
+      if (!previewResponse.ok) throw new Error("Unable to load document preview");
+      const previewBlob = await previewResponse.blob();
+      if (!previewBlob.size) throw new Error("The stored document is empty");
+      const previewName = document.name || storedDocument.file_name || "Claim document";
+      const isPdf = /\.pdf$/i.test(previewName);
+      const previewMimeType = isPdf
+        ? "application/pdf"
+        : document.mimeType || storedDocument.mime_type || previewBlob.type || "application/octet-stream";
+      const previewObjectUrl = URL.createObjectURL(
+        new Blob([previewBlob], {
+          type: previewMimeType,
+        }),
+      );
+
       handlePreview(
-        document.name || storedDocument.file_name || "Claim document",
-        previewUrl,
-        document.mimeType || storedDocument.mime_type || "application/pdf",
+        previewName,
+        previewObjectUrl,
+        previewMimeType,
       );
     } catch (error) {
       console.error("Unable to preview timeline document", error);
@@ -1166,13 +1130,20 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
 
   const handleDownload = (name: string, data: string, type: string) => {
     const link = document.createElement("a");
-    link.href = data.startsWith('http://') || data.startsWith('https://')
+    link.href = data.startsWith('http://') || data.startsWith('https://') || data.startsWith('blob:')
       ? data
       : `data:${type};base64,${data}`;
     link.download = name;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const closePreview = () => {
+    if (previewFile?.data.startsWith("blob:")) {
+      URL.revokeObjectURL(previewFile.data);
+    }
+    setPreviewFile(null);
   };
 
   const openRateList = async () => {
@@ -1625,6 +1596,23 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
       status as ClaimStatus,
     );
 
+    // A stage transition's "Claim No" must use the insurer/TPA claim number.
+    // ClaimNX's business/case references (for example CPC-101) are internal
+    // identifiers and are only valid fallbacks for legacy claims that do not
+    // have an insurer claim number yet.
+    const persistedInsurerClaimNumber =
+      claim?.formData?.insurer_claim_no ||
+      claim?.formData?.payer_claim_no ||
+      claim?.formData?.actual_claim_no ||
+      "";
+    const persistedCaseReference =
+      claim?.claimNumber ||
+      claim?.formData?.claim_id ||
+      claim?.formData?.claim_no ||
+      claim?.formData?.claimNumber ||
+      claim?.caseReferenceId ||
+      "";
+
     setLocalFormData({
       ...initialData,
       multipleFiles: [],
@@ -1634,12 +1622,15 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
       dischargeDate: safeFormatYmd(initialData.dischargeDate || claim?.dischargeDate || claim?.formData?.dischargeDate || claim?.formData?.dis_date) || "",
       settlement_date: safeFormatYmd(new Date()),
       claim_id:
+        persistedInsurerClaimNumber ||
+        initialData.insurer_claim_no ||
         initialData.claim_id ||
+        persistedCaseReference ||
         (shouldAutoFillClaimId
           ? claim?.id.substring(0, 10).toUpperCase() || ""
           : ""),
       insurer_claim_no:
-        initialData.insurer_claim_no || claim?.formData?.insurer_claim_no || "",
+        persistedInsurerClaimNumber || initialData.insurer_claim_no || "",
       dis_total_bill:
         initialData.dis_total_bill || claim?.formData?.dis_total_bill || 0,
       topup_claim_id: initialData.topup_claim_id || claim?.formData?.topup_claim_id || "",
@@ -1834,7 +1825,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
     }
 
     setIsSaving(true);
-    setTimeout(() => {
+    setTimeout(async () => {
       let targetStatus: ClaimStatus =
         (pendingStatus as any) === "REOPEN CASE"
           ? ClaimStatus.ASSESSMENT_INITIATED
@@ -1884,17 +1875,33 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
       }
 
       if (pendingStatus === ClaimStatus.ACCOUNT_RECONCILIATION) {
-        if (localFormData.bank_fund_status === "Partially Fund Received") {
-          targetStatus = ClaimStatus.PARTIAL_SETTLEMENT_RECOVERABLE;
-        } else if (localFormData.bank_fund_status === "Fund Not received") {
-          targetStatus = ClaimStatus.SETTLEMENT_FAILED;
-        } else if (localFormData.bank_fund_status === "Fund Received") {
-          targetStatus = ClaimStatus.BANK_RECONCILIATION_COMPLETED;
+        // A finance outcome controls the next operational stage. The backend
+        // validates this same transition map before persisting the update.
+        switch (localFormData.bank_fund_status) {
+          case "Fund Received":
+            targetStatus = ClaimStatus.BANK_RECONCILIATION_COMPLETED;
+            break;
+          case "Partially Fund Received":
+            targetStatus = ClaimStatus.PARTIAL_SETTLEMENT_RECOVERABLE;
+            break;
+          case "Fund Not received":
+            targetStatus = ClaimStatus.CLAIM_APPROVED;
+            break;
+          default:
+            targetStatus = ClaimStatus.ACCOUNT_RECONCILIATION;
         }
       }
 
+      // Claim updates are JSON requests. Never include Base64 file content in
+      // them: files are persisted separately through the multipart document
+      // endpoint below. This keeps stage transitions reliable for large PDFs.
       const stageSpecificData = { ...localFormData };
-      delete stageSpecificData.fileData;
+      [
+        "fileData",
+        "multipleFiles",
+        "documents_pod_data",
+        "topup_attachment_data",
+      ].forEach((key) => delete stageSpecificData[key]);
 
       // Capture previous values for audit log
       const previousValues: Record<string, any> = {};
@@ -1941,21 +1948,37 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
         }
       }
 
-      // Handle multiple documents
-      const stageDocuments = [];
+      // Keep workflow JSON to metadata only.  Actual document bytes are
+      // uploaded after the claim update to the backend document registry.
+      // Storing Base64 here made previews depend on browser-only state and
+      // led to unrelated generated pre-auth forms being displayed.
+      const pendingDocumentUploads: Array<any> = [];
+      const stageDocuments: Array<any> = [];
+      const registerStageDocument = (document: any) => {
+        pendingDocumentUploads.push(document);
+        stageDocuments.push({
+          name: document.name,
+          type: document.type || "Claim Document",
+          mimeType: document.mimeType || "application/octet-stream",
+          uploadedAt: document.uploadedAt,
+        });
+      };
       if (localFormData.multipleFiles && localFormData.multipleFiles.length > 0) {
         localFormData.multipleFiles.forEach((file: any) => {
-          stageDocuments.push({
+          registerStageDocument({
             name: file.fileName,
             data: file.fileData,
             mimeType: file.fileType || "application/pdf",
+            type: pendingStatus || "Claim Document",
             uploadedAt: new Date().toISOString(),
           });
         });
       } else if (localFormData.fileData && localFormData.fileName) {
-        stageDocuments.push({
+        registerStageDocument({
           name: localFormData.fileName,
           data: localFormData.fileData,
+          mimeType: localFormData.fileType || "application/octet-stream",
+          type: pendingStatus || "Claim Document",
           uploadedAt: new Date().toISOString(),
         });
       }
@@ -1963,9 +1986,10 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
         localFormData.documents_pod_data &&
         localFormData.documents_pod_name
       ) {
-        stageDocuments.push({
+        registerStageDocument({
           name: localFormData.documents_pod_name,
           data: localFormData.documents_pod_data,
+          type: "Proof of Delivery",
           uploadedAt: new Date().toISOString(),
         });
       }
@@ -1973,7 +1997,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
         localFormData.topup_attachment_data &&
         localFormData.topup_attachment_name
       ) {
-        stageDocuments.push({
+        registerStageDocument({
           name: localFormData.topup_attachment_name,
           data: localFormData.topup_attachment_data,
           type: "Top Up Claim Approval",
@@ -1992,15 +2016,9 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
         const amt = Number(localFormData.set_incl_tds || 0);
         const dt = localFormData.utr_date || new Date().toISOString().split("T")[0];
 
-        stageDocuments.push({
-          name: `Settlement_Receipt_${utr}.pdf`,
-          type: "Settlement Receipt",
-          data: "data:application/pdf;base64,JVBERi0xLjQKJ...",
-          uploadedAt: new Date().toISOString(),
-          utrNumber: utr,
-          utrDate: dt,
-          settledAmt: amt,
-        });
+        // A receipt must be generated/uploaded by the backend settlement
+        // process. Never register a placeholder as a document because it
+        // would produce a broken preview for users later in the workflow.
       }
 
       let commentVal =
@@ -2033,7 +2051,6 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
         date: new Date().toISOString(),
         comment: commentVal,
         fileName: localFormData.fileName,
-        fileData: localFormData.fileData,
         type: "status_change",
         stageData: { ...stageSpecificData, documents: stageDocuments },
         userName:
@@ -2086,7 +2103,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
         dischargeDate: localFormData.dischargeDate || localFormData.dis_date || claim!.dischargeDate,
         formData: { 
           ...claim!.formData, 
-          ...localFormData,
+          ...stageSpecificData,
           admissionDate: localFormData.admissionDate || localFormData.adm_date || claim!.admissionDate,
           adm_date: localFormData.admissionDate || localFormData.adm_date || claim!.admissionDate,
           dischargeDate: localFormData.dischargeDate || localFormData.dis_date || claim!.dischargeDate,
@@ -2155,7 +2172,35 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
         });
       }
 
-      onUpdate(updatedClaim);
+      const persistedClaim = await onUpdate(updatedClaim);
+      if (!persistedClaim) {
+        setIsSaving(false);
+        return;
+      }
+
+      for (const document of pendingDocumentUploads) {
+        try {
+          const encoded = String(document.data ?? "");
+          const dataUrl = encoded.startsWith("data:")
+            ? encoded
+            : `data:${document.mimeType || "application/octet-stream"};base64,${encoded}`;
+          const blob = await (await fetch(dataUrl)).blob();
+          const uploadMimeType = /\.pdf$/i.test(document.name)
+            ? "application/pdf"
+            : document.mimeType || blob.type || "application/octet-stream";
+          const file = new window.File([blob], document.name, {
+            type: uploadMimeType,
+          });
+          await documentsApi.uploadClaimFile({
+            claimId: persistedClaim.id,
+            file,
+            category: document.type || pendingStatus || "Claim Document",
+          });
+        } catch (uploadError) {
+          console.error("Failed to persist claim document", uploadError);
+          toast.error(`The workflow was saved, but '${document.name}' could not be stored. Please retry the upload.`);
+        }
+      }
       setIsSaving(false);
       setShowStatusModal(false);
       setPendingStatus(null);
@@ -2234,7 +2279,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                     </div>
                   </div>
                   {(() => {
-                    const allEventDocs: Array<{ name: string; data?: string; mimeType?: string; type?: string }> = [];
+                    const allEventDocs: Array<{ name: string; data?: string; mimeType?: string; type?: string; documentId?: string }> = [];
 
                     if (event.fileData) {
                       allEventDocs.push({
@@ -2259,6 +2304,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                               data: d.data,
                               mimeType: d.mimeType || d.type,
                               type: d.type,
+                              documentId: d.documentId || d.document_id || d.id,
                             });
                           }
                         }
@@ -2279,7 +2325,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                 </div>
 
                 {(() => {
-                  const allEventDocs: Array<{ name: string; data?: string; mimeType?: string; type?: string }> = [];
+                  const allEventDocs: Array<{ name: string; data?: string; mimeType?: string; type?: string; documentId?: string }> = [];
 
                   if (event.fileData) {
                     allEventDocs.push({
@@ -2304,6 +2350,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                             data: d.data,
                             mimeType: d.mimeType || d.type,
                             type: d.type,
+                            documentId: d.documentId || d.document_id || d.id,
                           });
                         }
                       }
@@ -2755,7 +2802,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                         color="blue"
                       />
                       {canAccessStageAction &&
-                        canAccessStageAction(currentStageKey, "edit") && (
+                        canAccessStageAction(currentStageKey, "update") && (
                           <button
                             onClick={() => {
                               setEditedProfileData({ ...claim.formData });
@@ -3181,10 +3228,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
             </div>
 
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex items-center justify-between gap-4">
-              {isViewAllowed ||
-              (canAccessStageAction &&
-                canAccessStageAction(currentStageKey, "upload_download")) ? (
-                <>
+              <>
                   <button
                     onClick={() => setIsDocumentsModalOpen(true)}
                     className="px-4 py-2 bg-[#000080] text-white rounded-xl text-sm font-black uppercase tracking-widest hover:bg-blue-900 transition-all shadow-sm active:scale-95"
@@ -3197,19 +3241,10 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                   >
                     Rate List / SOC
                   </button>
-                </>
-              ) : (
-                <div className="w-full p-4 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-center">
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                    Document Access Restricted
-                  </p>
-                </div>
-              )}
+              </>
             </div>
 
-            {isViewAllowed ||
-            (canAccessStageAction &&
-              canAccessStageAction(currentStageKey, "timeline")) ? (
+            {(
               <div
                 className={`bg-white rounded-[2rem] border border-slate-200 shadow-sm flex flex-col overflow-hidden h-full`}
               >
@@ -3330,7 +3365,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                                   )}
                                 </div>
                                 {(() => {
-                                   const allEventDocs: Array<{ name: string; data?: string; mimeType?: string }> = [];
+                                   const allEventDocs: Array<{ name: string; data?: string; mimeType?: string; documentId?: string }> = [];
 
                                    if (event.fileData) {
                                      allEventDocs.push({
@@ -3352,7 +3387,8 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                                            allEventDocs.push({
                                              name: d.name,
                                              data: d.data,
-                                             mimeType: d.mimeType || "application/pdf",
+                                              mimeType: d.mimeType || "application/pdf",
+                                              documentId: d.documentId || d.document_id || d.id,
                                            });
                                          }
                                        }
@@ -3361,16 +3397,13 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
 
                                    if (allEventDocs.length === 0) return null;
 
-                                   const canView = isViewAllowed || (canAccessStageAction && canAccessStageAction(currentStageKey, "upload_download"));
-                                   if (!canView) return null;
-
                                    return (
                                      <div className="flex flex-col gap-1.5 mt-2 items-end">
                                        {allEventDocs.map((doc, docIdx) => (
                                          <button
                                            key={docIdx}
                                            onClick={() => void openTimelineDocumentPreview(doc)}
-                                           className="px-4 py-1.5 bg-[#000080] text-white rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-blue-900 transition-all flex items-center shadow-md shrink-0 cursor-pointer"
+                                           className="inline-flex min-w-max shrink-0 items-center whitespace-nowrap px-4 py-1.5 bg-[#000080] text-white rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-blue-900 transition-all shadow-md cursor-pointer"
                                            title={`View ${doc.name}`}
                                          >
                                            <Eye size={12} className="mr-1.5 shrink-0" />
@@ -3387,16 +3420,6 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                       })}
                   </div>
                 </div>
-              </div>
-            ) : (
-              <div className="bg-white p-12 rounded-[2rem] border border-slate-200 shadow-sm text-center">
-                <Clock className="mx-auto text-slate-200 mb-4" size={48} />
-                <h3 className="text-lg font-bold text-slate-400 uppercase tracking-tight">
-                  Timeline Restricted
-                </h3>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-2">
-                  You do not have permission to view the case timeline
-                </p>
               </div>
             )}
           </div>
@@ -3425,7 +3448,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                 <Download size={16} className="mr-2" /> Download
               </button>
               <button
-                onClick={() => setPreviewFile(null)}
+                onClick={closePreview}
                 className="p-2.5 bg-white/10 text-white rounded-full hover:bg-white/20 transition-all"
               >
                 <X size={24} />
@@ -3437,7 +3460,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
               <img
                 src={
                   previewFile.data.startsWith("data:") ||
-                  previewFile.data.startsWith("http")
+                  previewFile.data.startsWith("http") || previewFile.data.startsWith("blob:")
                     ? previewFile.data
                     : `data:${previewFile.type};base64,${previewFile.data}`
                 }
@@ -3448,7 +3471,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
               <iframe
                 src={
                   previewFile.data.startsWith("data:") ||
-                  previewFile.data.startsWith("http")
+                  previewFile.data.startsWith("http") || previewFile.data.startsWith("blob:")
                     ? previewFile.data
                     : `data:${previewFile.type || "application/pdf"};base64,${previewFile.data}`
                 }
@@ -3870,9 +3893,10 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                           <input
                             type="text"
                             value={
-                              localFormData.claim_id ||
                               localFormData.insurer_claim_no ||
                               claim.formData?.insurer_claim_no ||
+                              localFormData.claim_id ||
+                              claim.claimNumber ||
                               ""
                             }
                             onChange={(e) =>

@@ -14,7 +14,7 @@ import { toast } from 'sonner';
 
 interface UserProfileProps {
   user: HospitalUser;
-  onUpdate: (updatedUser: HospitalUser) => void;
+  onUpdate: (updatedUser: HospitalUser) => Promise<void> | void;
   claims: Claim[];
   allUsers: HospitalUser[];
   onClose: () => void;
@@ -31,6 +31,11 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdate, claims, allUs
 
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState<HospitalUser>(user);
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    setFormData(user);
+  }, [user]);
   
   const validateDateOnBlur = (key: string, value: string) => {
     if (!value) return;
@@ -121,9 +126,19 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdate, claims, allUs
     fetchUserLogs();
   }, [user.id]);
 
-  const handleSave = () => {
-    onUpdate(formData);
-    setIsEditing(false);
+  const handleSave = async () => {
+    const displayName = [formData.firstName, formData.lastName]
+      .filter((value): value is string => Boolean(value?.trim()))
+      .join(' ')
+      .trim() || formData.displayName;
+    const updatedUser = { ...formData, displayName };
+
+    setIsSaving(true);
+    try {
+      await onUpdate(updatedUser);
+      setFormData(updatedUser);
+      setIsEditing(false);
+      toast.success('Profile details saved successfully.');
     auditService.log({
       userId: user.id,
       userName: user.displayName,
@@ -132,6 +147,12 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdate, claims, allUs
       resourceId: user.id,
       details: 'User updated their personal profile details'
     });
+    } catch (error) {
+      console.error('Unable to save profile details', error);
+      toast.error('Unable to save profile details. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const userStats = React.useMemo(() => {
@@ -288,10 +309,11 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdate, claims, allUs
                       <User size={16} className="mr-2 text-blue-500" /> Personal Information
                     </h3>
                     <button 
-                      onClick={() => isEditing ? handleSave() : setIsEditing(true)}
-                      className="text-[10px] font-black text-blue-600 uppercase tracking-widest flex items-center hover:underline bg-white px-3 py-1.5 rounded-lg border border-slate-100 shadow-sm"
+                      onClick={() => isEditing ? void handleSave() : setIsEditing(true)}
+                      disabled={isSaving}
+                      className="text-[10px] font-black text-blue-600 uppercase tracking-widest flex items-center hover:underline bg-white px-3 py-1.5 rounded-lg border border-slate-100 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {isEditing ? <><Save size={14} className="mr-1.5" /> Save</> : <><Edit2 size={14} className="mr-1.5" /> Edit Profile</>}
+                      {isSaving ? <><Save size={14} className="mr-1.5 animate-pulse" /> Saving...</> : isEditing ? <><Save size={14} className="mr-1.5" /> Save</> : <><Edit2 size={14} className="mr-1.5" /> Edit Profile</>}
                     </button>
                   </div>
                   
@@ -500,7 +522,7 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdate, claims, allUs
 
                <div className="space-y-4">
                   {logs.length > 0 ? logs.map((log, i) => (
-                    <div key={log.id} className="bg-white border border-slate-100 p-4 rounded-2xl flex items-center gap-4 hover:shadow-md transition-all group">
+                    <div key={log.id || `${log.timestamp}-${log.action}-${log.resourceId}-${i}`} className="bg-white border border-slate-100 p-4 rounded-2xl flex items-center gap-4 hover:shadow-md transition-all group">
                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
                          log.action.includes('LOGIN') ? 'bg-blue-50 text-blue-600' :
                          log.action.includes('UPDATE') ? 'bg-amber-50 text-amber-600' :

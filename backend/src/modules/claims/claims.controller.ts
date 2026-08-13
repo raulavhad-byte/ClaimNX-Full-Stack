@@ -18,6 +18,7 @@ import { ClaimsService } from './claims.service';
 import { CreateClaimDto } from './dto/create-claim.dto';
 import { UpdateClaimDto } from './dto/update-claim.dto';
 import { ClaimFilterDto } from './dto/claim-filter.dto';
+import type { ClaimStageActor } from './claim-stage-permissions';
 
 @Controller('claims')
 @UseGuards(JwtAuthGuard)
@@ -37,25 +38,29 @@ export class ClaimsController {
   @Get()
   findAll(
     @Query() filter: ClaimFilterDto,
+    @CurrentUser('id') actorUserId: string,
   ) {
-    return this.claimsService.findAll(filter);
+    return this.claimsService.findAll(filter, actorUserId);
   }
 
   @Get(':id')
   findOne(
     @Param('id') id: string,
+    @CurrentUser('id') actorUserId: string,
   ) {
-    return this.claimsService.findOne(id);
+    return this.claimsService.findOne(id, actorUserId);
   }
 
   @Patch(':id')
   update(
     @Param('id') id: string,
     @Body() updateClaimDto: UpdateClaimDto,
+    @CurrentUser() actor: ClaimStageActor,
   ) {
     return this.claimsService.update(
       id,
       updateClaimDto,
+      actor,
     );
   }
 

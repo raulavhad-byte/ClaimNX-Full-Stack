@@ -51,6 +51,16 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
   
   const [selectedClaim, setSelectedClaim] = useState<Claim | null>(null);
 
+  const normalise = (value?: string) => String(value || '').trim().toLocaleLowerCase();
+  const claimHospitalId = (claim: Claim) => claim.hospitalId || claim.formData?.hospitalId || '';
+  const hospitalForClaim = (claim: Claim) => users.find(h => h.id === claimHospitalId(claim)) ||
+    visibleHospitals.find(h => h.id === claimHospitalId(claim));
+  const claimHospitalName = (claim: Claim) => hospitalForClaim(claim)?.displayName ||
+    claim.hospitalName || claim.formData?.hospitalName || claim.formData?.hospital_name ||
+    claim.formData?.hosp_name || 'Hospital name unavailable';
+  const isInScope = (allowed: string[] | undefined, actual?: string) =>
+    !allowed?.length || allowed.some(value => normalise(value) === normalise(actual));
+
   const configuredMedicalStages = useMemo(() => {
     const configuredKeys = currentUser.allowedStages || [];
     return new Set(
@@ -111,16 +121,15 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
 
       if (userZones.length > 0 || userStates.length > 0 || userDistricts.length > 0) {
         filtered = filtered.filter(c => {
-          const hospId = c.hospitalId || c.formData?.hospitalId;
-          const hosp = users.find(h => h.id === hospId) || visibleHospitals.find(h => h.id === hospId);
+          const hosp = hospitalForClaim(c);
           // Claim location is a database snapshot, so an officer's queue can
           // be filtered even when users.view is intentionally unavailable.
-          const claimZone = hosp?.zone || c.formData?.hosp_zone || '';
-          const claimState = hosp?.state || c.formData?.hosp_state || c.formData?.p_state || '';
-          const claimDistrict = hosp?.district || c.formData?.hosp_district || c.formData?.p_district || '';
-          const zoneMatch = userZones.length === 0 || userZones.includes(claimZone);
-          const stateMatch = userStates.length === 0 || userStates.includes(claimState);
-          const districtMatch = userDistricts.length === 0 || userDistricts.includes(claimDistrict);
+          const claimZone = hosp?.zone || c.formData?.hosp_zone || c.formData?.hospitalZone || c.formData?.hospital_zone || c.formData?.zone || c.formData?.hospital?.zone || '';
+          const claimState = hosp?.state || c.formData?.hosp_state || c.formData?.hospitalState || c.formData?.hospital_state || c.formData?.p_state || c.formData?.state || c.formData?.hospital?.state || '';
+          const claimDistrict = hosp?.district || c.formData?.hosp_district || c.formData?.hospitalDistrict || c.formData?.hospital_district || c.formData?.p_district || c.formData?.district || c.formData?.city || c.formData?.hospital?.district || c.formData?.hospital?.city || '';
+          const zoneMatch = isInScope(userZones, claimZone);
+          const stateMatch = isInScope(userStates, claimState);
+          const districtMatch = isInScope(userDistricts, claimDistrict);
 
           return zoneMatch && stateMatch && districtMatch;
         });
@@ -128,8 +137,13 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
     }
 
     return filtered.filter(c => {
-      const hospital = visibleHospitals.find(h => h.id === (c.hospitalId || c.formData?.hospitalId || ''));
-      const isScrutinyRequired = hospital?.valueAddedServices?.medicalScrutinyRequired !== false;
+      const hospital = hospitalForClaim(c);
+      // Discharge requires a medical decision even when an older hospital
+      // profile has not enabled the optional medical-scrutiny setting.
+      const isDischargeReview = c.status === ClaimStatus.DISCHARGE_INITIATED ||
+        c.status === ClaimStatus.DISCHARGE_QUERY_REPLY;
+      const isScrutinyRequired = isDischargeReview ||
+        hospital?.valueAddedServices?.medicalScrutinyRequired !== false;
 
       // Exclusion for Recovery & Reconciliation
       if (c.product === Product.RECOVERY_RECONCILIATION) return false;
@@ -162,18 +176,19 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
       // administrators route any configured pre-auth, enhancement, discharge
       // or medical-query stage to the Medical Officer for scrutiny.
       const isConfiguredMedicalStage = configuredMedicalStages.has(c.status as ClaimStatus);
-      if (!isScrutinyRequired || (!isStatusMatch && !isConfiguredMedicalStage)) return false;
+      const officerName = normalise(currentUser.displayName || currentUser.username);
+      const processedByCurrentOfficer = c.assignedMedicalUserId === currentUser.id ||
+        normalise(c.assignedMedicalUserName) === officerName ||
+        (c.history || []).some(event =>
+          event.type === 'medical_decision' && normalise(event.userName) === officerName,
+        );
+      if (!isScrutinyRequired || (!isStatusMatch && !isConfiguredMedicalStage && !processedByCurrentOfficer)) return false;
 
       // Hierarchy filtering: Allow clinical roles to see all cases in their assigned hospitals
-      const isClinicalRole = [
-        'medical officer',
-        'medical team',
-        'medical specialist',
-        'medical head',
-        'doctor',
-        'consultant',
-        'clinical review'
-      ].includes((currentUser.role || '').toLowerCase());
+      const normalizedRole = normalise(currentUser.role);
+      const isClinicalRole = normalizedRole.includes('medical') ||
+        normalizedRole.includes('clinical') ||
+        ['doctor', 'consultant'].includes(normalizedRole);
       if (isManager || isClinicalRole || currentUser.isAdmin || currentUser.role === 'Super Admin') {
         return true;
       }
@@ -183,6 +198,29 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
     });
   }, [claims, visibleHospitals, currentUser, isManager, users, configuredMedicalStages]);
 
+  const availableHospitals = useMemo(() => {
+    // A hospital can have more than one user/directory record.  Group by the
+    // hospital's normalized display name while retaining every underlying ID,
+    // so the selector neither displays duplicates nor hides its claims.
+    const hospitals = new Map<string, { id: string; name: string; ids: string[] }>();
+    const addHospital = (id: string, name: string) => {
+      const normalizedName = normalise(name);
+      if (!id || !normalizedName) return;
+      const existing = hospitals.get(normalizedName);
+      if (existing) {
+        if (!existing.ids.includes(id)) existing.ids.push(id);
+        return;
+      }
+      hospitals.set(normalizedName, { id, name: name.trim(), ids: [id] });
+    };
+
+    visibleHospitals.forEach((hospital) => {
+      if (hospital.entityType === 'Hospital') addHospital(hospital.id, hospital.displayName);
+    });
+    medicalClaims.forEach((claim) => addHospital(claimHospitalId(claim), claimHospitalName(claim)));
+    return [...hospitals.values()].sort((left, right) => left.name.localeCompare(right.name));
+  }, [medicalClaims, visibleHospitals]);
+
   const filteredClaims = useMemo(() => {
     return medicalClaims.filter(c => {
       const matchesSearch = 
@@ -190,7 +228,8 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
         c.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
         c.diagnosis.toLowerCase().includes(searchQuery.toLowerCase());
       
-      const matchesHospital = selectedHospital === 'All' || (c.formData?.hospitalId || '') === selectedHospital;
+      const selectedHospitalEntry = availableHospitals.find((hospital) => hospital.id === selectedHospital);
+      const matchesHospital = selectedHospital === 'All' || !!selectedHospitalEntry?.ids.includes(claimHospitalId(c));
       let matchesStatus = true;
       if (selectedStatus === 'All') {
         matchesStatus = true;
@@ -232,6 +271,11 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
           ClaimStatus.ENHANCEMENT_QUERY_RAISED,
           ClaimStatus.DISCHARGE_QUERY_RAISED
         ].includes(c.status as ClaimStatus);
+      } else if (selectedStatus === 'ProcessedByMe') {
+        const officerName = normalise(currentUser.displayName || currentUser.username);
+        matchesStatus = c.assignedMedicalUserId === currentUser.id ||
+          normalise(c.assignedMedicalUserName) === officerName ||
+          (c.history || []).some(event => event.type === 'medical_decision' && normalise(event.userName) === officerName);
       } else if (selectedStatus === ClaimStatus.MEDICAL_APPROVED) {
         matchesStatus = [
           ClaimStatus.MEDICAL_APPROVED, 
@@ -256,14 +300,7 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
 
       return matchesSearch && matchesHospital && matchesStatus && matchesPriority;
     });
-  }, [medicalClaims, searchQuery, selectedHospital, selectedStatus, selectedPriority, visibleHospitals]);
-
-  // Default to Pending Review on load if nothing selected
-  useEffect(() => {
-    if (selectedStatus === 'All' && stats.pending > 0) {
-      setSelectedStatus('PendingBucket');
-    }
-  }, []);
+  }, [medicalClaims, availableHospitals, searchQuery, selectedHospital, selectedStatus, selectedPriority, currentUser]);
 
   const performance = useMemo(() => {
     const officerName = String(currentUser.displayName || currentUser.username || '').trim().toLowerCase();
@@ -401,6 +438,15 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
       avgTat: performance.averageTatLabel,
     };
   }, [medicalClaims, claims, visibleHospitals, performance.averageTatLabel]);
+
+  // Default to Pending Review after the queue statistics are available.
+  // Keeping this effect below `stats` avoids accessing it before its
+  // initialization during the first component render.
+  useEffect(() => {
+    if (selectedStatus === 'All' && stats.pending > 0) {
+      setSelectedStatus('PendingBucket');
+    }
+  }, [selectedStatus, stats.pending]);
 
   const getPriorityColor = (priority: string) => {
     switch(priority) {
@@ -590,7 +636,7 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
           className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium outline-none"
         >
           <option value="All">All Hospitals</option>
-          {visibleHospitals.filter(h => h.entityType === 'Hospital').map(h => <option key={h.id} value={h.id}>{h.displayName}</option>)}
+          {availableHospitals.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
         </select>
         <select 
           value={selectedStatus}
@@ -600,6 +646,7 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
           <option value="All">All Statuses</option>
           <option value="PendingBucket">Pending Review (All New)</option>
           <option value="UnderReview">In-Scrutiny / Under Review</option>
+          <option value="ProcessedByMe">My Processed Claims</option>
           <option value={ClaimStatus.MEDICAL_QUERY_RAISED}>{ClaimStatus.MEDICAL_QUERY_RAISED}</option>
           <option value={ClaimStatus.MEDICAL_APPROVED}>{ClaimStatus.MEDICAL_APPROVED}</option>
           <option value={ClaimStatus.MEDICAL_REJECTED}>{ClaimStatus.MEDICAL_REJECTED}</option>
@@ -678,7 +725,7 @@ export default function MedicalUnderwritingDashboard({ claims, visibleHospitals,
                     </td>
                     <td className="px-3 py-4">
                       <div className="font-medium text-slate-700 max-w-[150px] truncate">
-                        {visibleHospitals.find(h => h.id === (claim.formData?.hospitalId || ''))?.displayName || claim.formData?.hosp_name || claim.formData?.hospitalId || 'Unknown'}
+                        {claimHospitalName(claim)}
                       </div>
                     </td>
                     <td className="px-3 py-4">
@@ -1184,15 +1231,53 @@ function MedicalReviewScreen({ claim, currentUser, hospitalName, onBack, onUpdat
   };
 
   const allDocs = useMemo(() => {
-    const seen = new Set<string>();
+    const documentIndex = new Map<string, number>();
     const uniqueDocs: any[] = [];
+    const normalizedFileName = (value: unknown) => String(value || '').trim().toLocaleLowerCase();
+    const registryByName = new Map(
+      storedDocuments
+        .filter((document) => document?.id && document?.file_name)
+        .map((document) => [normalizedFileName(document.file_name), document]),
+    );
     
     const addUnique = (doc: any) => {
-      const id = doc.data || doc.url || doc.name;
-      if (!id || seen.has(id)) return;
-      seen.add(id);
+      // A timeline entry and the persisted document record commonly share a
+      // filename. Keep one card, but merge the persisted ID so that card can
+      // obtain a signed URL from the backend when it is opened.
+      const key = String(doc.name || doc.file_name || doc.documentId || doc.data || doc.url || '')
+        .trim()
+        .toLocaleLowerCase();
+      if (!key) return;
+
+      const existingIndex = documentIndex.get(key);
+      if (existingIndex !== undefined) {
+        uniqueDocs[existingIndex] = {
+          ...uniqueDocs[existingIndex],
+          ...doc,
+          documentId: doc.documentId || uniqueDocs[existingIndex].documentId,
+          data: doc.data || uniqueDocs[existingIndex].data,
+          url: doc.url || uniqueDocs[existingIndex].url,
+        };
+        return;
+      }
+
+      documentIndex.set(key, uniqueDocs.length);
       uniqueDocs.push(doc);
     };
+
+    // Registry records are authoritative: they carry the immutable document
+    // ID required to create a signed preview URL. Put them in the collection
+    // first, then merge matching timeline metadata below.
+    storedDocuments.forEach((document) => {
+      addUnique({
+        documentId: document.id,
+        name: document.file_name || 'Claim Document',
+        type: document.category || document.mime_type || 'Claim Document',
+        mimeType: document.mime_type || 'application/pdf',
+        uploadedAt: document.uploaded_at || document.created_at,
+        fileSize: document.file_size,
+      });
+    });
 
     const historyDocs = claim.history?.flatMap(h => {
       const docs = [...(h.stageData?.documents || [])].map(d => ({
@@ -1210,42 +1295,63 @@ function MedicalReviewScreen({ claim, currentUser, hospitalName, onBack, onUpdat
       }
       return docs;
     }) || [];
-    
-    historyDocs.forEach(addUnique);
-    (claim.formData?.attachedDocs || []).forEach(d => {
-      addUnique({
-        ...d,
-        uploadedAt: d.uploadedAt || claim.updatedAt || claim.createdAt || new Date().toISOString()
-      });
-    });
-    (claim.formData?.uploadedDocuments || []).forEach(d => {
-      addUnique({
-        ...d,
-        uploadedAt: d.uploadedAt || claim.updatedAt || claim.createdAt || new Date().toISOString()
-      });
-    });
-    storedDocuments.forEach((document) => {
-      addUnique({
-        documentId: document.id,
-        name: document.file_name || 'Claim Document',
-        type: document.category || document.mime_type || 'Claim Document',
-        mimeType: document.mime_type || 'application/pdf',
-        uploadedAt: document.uploaded_at || document.created_at,
-        fileSize: document.file_size,
-      });
-    });
+
+    const addResolvableDocument = (document: any) => {
+      const registryDocument = document.documentId
+        ? storedDocuments.find((stored) => String(stored.id) === String(document.documentId))
+        : registryByName.get(normalizedFileName(document.name || document.file_name));
+
+      if (registryDocument) {
+        addUnique({
+          ...document,
+          documentId: registryDocument.id,
+          name: registryDocument.file_name || document.name,
+          type: document.type || registryDocument.category || 'Claim Document',
+          mimeType: registryDocument.mime_type || document.mimeType,
+        });
+        return;
+      }
+
+      // Old records with embedded data remain viewable. Metadata-only
+      // timeline entries are intentionally omitted: they do not point to a
+      // file and showing them creates a broken preview action.
+      if (document.data || document.url) addUnique(document);
+    };
+
+    historyDocs.forEach(addResolvableDocument);
+    (claim.formData?.attachedDocs || []).forEach((document) => addResolvableDocument({
+      ...document,
+      uploadedAt: document.uploadedAt || claim.updatedAt || claim.createdAt || new Date().toISOString(),
+    }));
+    (claim.formData?.uploadedDocuments || []).forEach((document) => addResolvableDocument({
+      ...document,
+      uploadedAt: document.uploadedAt || claim.updatedAt || claim.createdAt || new Date().toISOString(),
+    }));
     
     return uniqueDocs;
   }, [claim, storedDocuments]);
 
   const openDocumentPreview = async (document: any) => {
     try {
-      if (document.documentId) {
-        const preview = await documentsApi.previewClaimDocument(document.documentId);
+      const normalizedName = String(document.name || document.file_name || '')
+        .trim()
+        .toLocaleLowerCase();
+      const registryDocument = storedDocuments.find((item) =>
+        (document.documentId && String(item.id) === String(document.documentId)) ||
+        (normalizedName && String(item.file_name || item.name || '')
+          .trim()
+          .toLocaleLowerCase() === normalizedName),
+      );
+
+      // The registry ID maps to one specific immutable Storage object. Never
+      // substitute another document when a match is missing: that can display
+      // the generated pre-auth form for an unrelated uploaded PDF.
+      if (registryDocument) {
+        const preview = await documentsApi.previewClaimDocument(registryDocument.id);
         setPreviewFile({
-          name: preview.file_name || document.name,
+          name: preview.file_name || registryDocument.file_name || document.name,
           data: preview.preview_url,
-          type: preview.mime_type || document.mimeType || 'application/pdf',
+          type: preview.mime_type || registryDocument.mime_type || document.mimeType || 'application/pdf',
         });
         return;
       }

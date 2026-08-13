@@ -91,6 +91,48 @@ interface ReconciliationDashboardProps {
 
 type AgingBucket = '0-30' | '30-45' | '45-60' | '60-90' | '90-120' | '120+' | 'File Dispatched';
 
+const claimHospitalId = (claim: Claim) => String(
+  claim.hospitalId ?? (claim as any).hospital_id ?? claim.formData?.hospitalId ?? '',
+);
+
+const claimHospitalName = (claim: Claim) => String(
+  (claim as any).hospitalName ??
+  (claim as any).hospital_name ??
+  claim.formData?.hospitalName ??
+  claim.formData?.hospital_name ??
+  claim.formData?.hospital?.name ??
+  '',
+).trim();
+
+const technicalClaimIdPattern = /^(?:CASE-)?[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const businessIdentifier = (...candidates: unknown[]) => {
+  const value = candidates
+    .map((candidate) => String(candidate ?? '').trim())
+    .find((candidate) => candidate && !technicalClaimIdPattern.test(candidate));
+
+  return value || 'Pending';
+};
+
+const claimBusinessCaseId = (claim: Claim) => businessIdentifier(
+  claim.formData?.case_id,
+  claim.formData?.caseId,
+  claim.formData?.case_no,
+  claim.formData?.caseNo,
+  claim.claimNumber,
+  (claim as any).claim_number,
+  claim.caseReferenceId,
+);
+
+const claimBusinessNumber = (claim: Claim) => businessIdentifier(
+  claim.formData?.insurer_claim_no,
+  claim.formData?.claim_no,
+  claim.formData?.claimNo,
+  claim.formData?.claim_number,
+  claim.claimNumber,
+  (claim as any).claim_number,
+);
+
 const ReconciliationDashboard: React.FC<ReconciliationDashboardProps> = ({ 
   claims, 
   hospitals, 
@@ -647,23 +689,6 @@ CRM Operations`,
     });
   }, [emailsDb, currentEmailFolder, searchQuery, selectedEmailHospital]);
 
-  const failedSettlementClaims = useMemo(() => {
-    return (claims || []).filter(c => {
-      const hasFailedStatus = c.status === ClaimStatus.FILE_DISPATCHED;
-      const hasFailedFlag = c.formData?.rpa_email_failed === true;
-      if (!hasFailedStatus || !hasFailedFlag) return false;
-
-      // Filter by hospital context if user is a hospital user or has a hospital context
-      const claimHospitalId = c.hospitalId;
-      const userHospitalId = currentUser?.hospitalId;
-
-      if (currentUser?.role === 'Hospital Staff' || currentUser?.role === 'Hospital Accounts' || currentUser?.role === 'Hospital Cashless Desk') {
-        if (userHospitalId && claimHospitalId !== userHospitalId) return false;
-      }
-      return true;
-    });
-  }, [claims, currentUser]);
-
   // Auto Refresh Logic
   useEffect(() => {
     // Check if user is editing something
@@ -742,7 +767,18 @@ CRM Operations`,
   });
 
   // Apply Location-Based Access Control
+  const isFinanceQueueUser = useMemo(() =>
+    /finance|account|reconciliation/i.test(currentUser.role ?? '') ||
+    (permissions || []).some((permission: string) => /recon|finance|account/i.test(String(permission))),
+  [currentUser.role, permissions]);
+
   const accessibleClaims = useMemo(() => {
+    // Finance routing is enforced by the API using the authenticated user's
+    // hospital, zone, state and district assignments. Do not re-apply the old
+    // browser-only filter here: hospitals do not carry a denormalized zone and
+    // it could hide authorised claims returned by the server.
+    if (isFinanceQueueUser) return claims;
+
     let filtered = claims;
     
     if (currentUser.role !== 'Super Admin' && !currentUser.isAdmin) {
@@ -772,7 +808,7 @@ CRM Operations`,
     }
     
     return filtered;
-  }, [claims, currentUser, hospitals]);
+  }, [claims, currentUser, hospitals, isFinanceQueueUser]);
 
   // Filter claims relevant to reconciliation (Discharge Approved onwards)
   const reconciliationClaims = useMemo(() => {
@@ -798,7 +834,13 @@ CRM Operations`,
       const isRelevant = relevantStatuses.includes(c.status);
       if (!isRelevant) return false;
 
-      // Hierarchy filtering
+      // Finance/Accounts users have already been filtered by the backend
+      // using their hospital and geographical scope. Do not apply the old
+      // "created by me" hierarchy rule here: discharge-approved work is
+      // created by hospital/operations users, not by the Finance user.
+      if (isFinanceQueueUser) return true;
+
+      // Hierarchy filtering for non-finance queues.
       if (!isManager) {
         return c.createdBy === currentUser.id;
       }
@@ -809,7 +851,32 @@ CRM Operations`,
 
       return currentUser.role === 'Super Admin' || currentUser.isAdmin || isMineOrReport;
     });
-  }, [accessibleClaims, isManager, currentUser, users]);
+  }, [accessibleClaims, isManager, currentUser, users, isFinanceQueueUser]);
+
+  // Until automated Email/RPA dispatch is enabled, every File Dispatched
+  // claim returned by the backend belongs in Finance's manual settlement
+  // queue. Visibility has already been enforced server-side.
+  const manualSettlementClaims = useMemo(
+    () => reconciliationClaims.filter((claim) => claim.status === ClaimStatus.FILE_DISPATCHED),
+    [reconciliationClaims],
+  );
+
+  // The hospital directory can be intentionally partial for a scoped user.
+  // Build the filter from backend-authorised claims as well, so Finance can
+  // always filter every hospital whose settlement work it can see.
+  const hospitalOptions = useMemo(() => {
+    const options = new Map<string, string>();
+    hospitals.forEach((hospital) => {
+      if (hospital.id && hospital.hospitalName) options.set(hospital.id, hospital.hospitalName);
+    });
+    reconciliationClaims.forEach((claim) => {
+      const id = claimHospitalId(claim);
+      if (!id) return;
+      options.set(id, claimHospitalName(claim) || options.get(id) || `Hospital ${id}`);
+    });
+    return Array.from(options, ([value, label]) => ({ value, label }))
+      .sort((left, right) => left.label.localeCompare(right.label));
+  }, [hospitals, reconciliationClaims]);
 
   // Calculate Aging and Buckets
   const claimsWithAging = useMemo(() => {
@@ -1012,7 +1079,7 @@ CRM Operations`,
       // Pending settlement means settlementStatus is not 'Full'
       const pendingInsurers = Array.from(new Set(
         reconciliationClaims
-          .filter(c => selectedHospitals.includes(c.formData?.hospitalId) && c.settlementStatus !== 'Full')
+          .filter(c => selectedHospitals.includes(claimHospitalId(c)) && c.settlementStatus !== 'Full')
           .map(c => c.insuranceProvider)
       )).sort();
       return pendingInsurers.map(ins => ({ label: ins, value: ins }));
@@ -1030,7 +1097,7 @@ CRM Operations`,
       // Filter by selected hospitals and pending settlement
       const pendingTpas = Array.from(new Set(
         reconciliationClaims
-          .filter(c => selectedHospitals.includes(c.formData?.hospitalId) && c.settlementStatus !== 'Full')
+          .filter(c => selectedHospitals.includes(claimHospitalId(c)) && c.settlementStatus !== 'Full')
           .map(c => c.formData?.tpa_provider)
           .filter(Boolean)
       )).sort();
@@ -1181,18 +1248,19 @@ CRM Operations`,
     return sortedClaims.filter(c => {
       const searchLower = searchQuery.toLowerCase();
       const utrNo = (c.formData?.utr_number || c.formData?.utr_no || c.formData?.set_utr_no || c.formData?.utr || c.formData?.utrNumber || '').toLowerCase();
-      const claimNo = (c.formData?.insurer_claim_no || '').toLowerCase();
+      const caseId = claimBusinessCaseId(c).toLowerCase();
+      const claimNo = claimBusinessNumber(c).toLowerCase();
       const ipdNo = (c.formData?.p_uhid || '').toLowerCase();
       const formDataStr = JSON.stringify(c.formData || {}).toLowerCase();
 
       const matchesSearch = c.patientName.toLowerCase().includes(searchLower) || 
-                            c.id.toLowerCase().includes(searchLower) ||
+                            caseId.includes(searchLower) ||
                             utrNo.includes(searchLower) ||
                             claimNo.includes(searchLower) ||
                             ipdNo.includes(searchLower) ||
                             formDataStr.includes(searchLower);
       const matchesBucket = selectedBucket === 'All' || c.agingBucket === selectedBucket;
-      const matchesHospital = selectedHospitals.length === 0 || selectedHospitals.includes(c.formData?.hospitalId);
+      const matchesHospital = selectedHospitals.length === 0 || selectedHospitals.includes(claimHospitalId(c));
       const matchesInsurance = selectedInsurances.length === 0 || selectedInsurances.includes(c.insuranceProvider);
       const matchesTpa = selectedTpas.length === 0 || selectedTpas.includes(c.formData?.tpa_provider);
       
@@ -1218,15 +1286,16 @@ CRM Operations`,
 
   const handleExcelDownload = (dataToExport: any[]) => {
     const worksheet = XLSX.utils.json_to_sheet(dataToExport.map(c => ({
-      'Hospital': hospitals.find(h => h.id === c.formData?.hospitalId)?.hospitalName || 'N/A',
+      'Hospital': claimHospitalName(c) || hospitals.find(h => h.id === claimHospitalId(c))?.hospitalName || 'N/A',
       'Patient Name': c.patientName,
-      'Claim No': c.formData?.insurer_claim_no || c.id,
+      'Case ID': claimBusinessCaseId(c),
+      'Claim No': claimBusinessNumber(c),
       'Insurance Provider': c.insuranceProvider,
       'TPA': c.formData?.tpa_provider || 'N/A',
       'Aging (Days)': c.agingDays,
       'Outstanding Amount': c.outstandingAmount || c.formData?.fin_app_amt || 0,
       'Paid Amount': c.paidAmount || 0,
-      'Status': c.settlementStatus || 'Pending',
+      'Status': c.status || c.settlementStatus || 'Pending',
       'Dispatched Date': c.fileDispatchedDate ? formatDate(c.fileDispatchedDate) : 'N/A'
     })));
     const workbook = XLSX.utils.book_new();
@@ -1489,9 +1558,9 @@ CRM Operations`,
                 {tab === 'Performance' && <Trophy size={14} />}
                 {tab === 'Automation' && <Zap size={14} />}
                 <span>{tab}</span>
-                {tab === 'Initiate Settlement' && failedSettlementClaims.length > 0 && (
+                {tab === 'Initiate Settlement' && manualSettlementClaims.length > 0 && (
                   <span className="bg-rose-500 text-white rounded-full px-1.5 py-0.5 text-[8px] font-bold animate-pulse">
-                    {failedSettlementClaims.length}
+                    {manualSettlementClaims.length}
                   </span>
                 )}
               </div>
@@ -1664,7 +1733,7 @@ CRM Operations`,
               </div>
               
               <MultiSelect 
-                options={hospitals.map(h => ({ label: h.hospitalName, value: h.id }))}
+                options={hospitalOptions}
                 selected={selectedHospitals}
                 onChange={setSelectedHospitals}
                 placeholder="Hospitals"
@@ -1754,16 +1823,16 @@ CRM Operations`,
                             <Link to={`/process-claim/${claim.id}?source=recon`} className="text-sm font-black text-[#141414] hover:text-blue-600 transition-colors truncate">
                               {claim.patientName === 'Unknown' ? '---' : claim.patientName}
                             </Link>
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Case ID: {claim.id}</p>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Case ID: {claimBusinessCaseId(claim)}</p>
                           </div>
                           <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded text-[9px] font-black uppercase tracking-widest border border-slate-200 truncate max-w-[150px]">
-                            {hospitals.find(h => h.id === claim.formData?.hospitalId)?.hospitalName || ' --- '}
+                            {claimHospitalName(claim) || hospitals.find(h => h.id === claimHospitalId(claim))?.hospitalName || ' --- '}
                           </span>
                         </div>
                       </div>
                     </td>
                     <td className="px-4 py-6">
-                      <p className="text-xs font-mono font-bold text-[#141414]">{claim.id}</p>
+                      <p className="text-xs font-mono font-bold text-[#141414]">{claimBusinessNumber(claim)}</p>
                       <p className="text-[10px] font-bold text-[#141414]/60 truncate max-w-[150px]">{claim.insuranceProvider}</p>
                     </td>
                     <td className="px-4 py-6">
@@ -1792,13 +1861,15 @@ CRM Operations`,
                     </td>
                     <td className="px-4 py-6">
                       <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border whitespace-nowrap ${
-                        claim.settlementStatus === 'Full' 
+                        claim.status === ClaimStatus.COMPLETE_SETTLEMENT
+                          ? 'bg-emerald-600 text-white border-emerald-700 shadow-sm'
+                          : claim.settlementStatus === 'Full'
                           ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
                           : claim.settlementStatus === 'Partial'
                             ? 'bg-amber-50 text-amber-600 border-amber-200'
                             : 'bg-slate-50 text-slate-400 border-slate-200'
                       }`}>
-                        {claim.settlementStatus || 'Pending'}
+                        {claim.status || claim.settlementStatus || 'Pending'}
                       </span>
                     </td>
                     <td className="px-4 py-6">
@@ -1826,11 +1897,9 @@ CRM Operations`,
                     <td className="px-4 py-6">
                       {(() => {
                         const isApproved = claim.status === ClaimStatus.COMPLETE_SETTLEMENT || claim.status === ClaimStatus.SETTLED;
-                        const tatLabel = isApproved ? 'Approved TAT' : 'Pending TAT';
                         const tatValue = formatTAT(claim.createdAt, isApproved ? (claim.formData?.settlement_date || claim.updatedAt) : new Date().toISOString());
                         return (
-                          <div className="flex flex-col items-center gap-0.5">
-                            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{tatLabel}</span>
+                          <div className="flex items-center justify-center">
                             <span className="text-xs font-bold text-slate-600 tabular-nums">{tatValue}</span>
                           </div>
                         );
@@ -1930,7 +1999,7 @@ CRM Operations`,
                   <div className="flex items-center gap-3">
                     <span className="bg-rose-50 border border-rose-200 text-rose-600 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full animate-pulse flex items-center gap-1.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                      FAILED SUBMISSION
+                      MANUAL SETTLEMENT REQUIRED
                     </span>
                     <span className="bg-slate-100 border border-slate-200 text-slate-800 text-[10px] font-mono font-bold px-3 py-1.5 rounded-full">
                       {selectedFailedClaim.id}
@@ -2439,22 +2508,22 @@ CRM Operations`,
                       Initiate Manual Settlement
                     </h2>
                     <p className="text-xs text-slate-500 mt-1 font-sans text-left">
-                      These claims are blocked at the <strong>File Dispatched</strong> stage due to an RPA or Email integration failure. Finance Team members can manually dispatch these claims, download enclosed dossiers, and initiate the settlement process.
+                      All claims at the <strong>File Dispatched</strong> stage are routed here for manual submission while Email and RPA integrations are unavailable.
                     </p>
                   </div>
                   <div className="bg-rose-50 text-rose-700 px-4 py-2 rounded-2xl border border-rose-100 text-xs font-bold leading-normal">
-                    Pending Manual Action: {failedSettlementClaims.length} Cases
+                    Pending Manual Action: {manualSettlementClaims.length} Cases
                   </div>
                 </div>
 
-                {failedSettlementClaims.length === 0 ? (
+                {manualSettlementClaims.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-16 text-center">
                     <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mb-4">
                       <CheckCircle2 size={32} className="text-emerald-500" />
                     </div>
-                    <h3 className="text-lg font-black text-slate-800">All Dispatches Synchronized</h3>
+                    <h3 className="text-lg font-black text-slate-800">No Files Awaiting Settlement</h3>
                     <p className="text-xs text-slate-500 max-w-sm mt-1 text-center">
-                      No claims currently show email or RPA upload failures. All file submissions have completed successfully via automation logs!
+                      No backend-authorized claims are currently at the File Dispatched stage.
                     </p>
                   </div>
                 ) : (
@@ -2465,12 +2534,12 @@ CRM Operations`,
                           <th className="p-4 text-[10px] font-black uppercase tracking-widest text-[#141414]/60">Case & Patient Details</th>
                           <th className="p-4 text-[10px] font-black uppercase tracking-widest text-[#141414]/60">Insurer / TPA</th>
                           <th className="p-4 text-[10px] font-black uppercase tracking-widest text-[#141414]/60">Total Bill / Appr. Amt</th>
-                          <th className="p-4 text-[10px] font-black uppercase tracking-widest text-[#141414]/60">Integration Error</th>
+                          <th className="p-4 text-[10px] font-black uppercase tracking-widest text-[#141414]/60">Submission Mode</th>
                           <th className="p-4 text-[10px] font-black uppercase tracking-widest text-[#141414]/60 text-right">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#141414]/10 animate-in fade-in duration-300">
-                        {failedSettlementClaims.map((claim) => {
+                        {manualSettlementClaims.map((claim) => {
                           const finalBill = claim.formData?.dis_total_bill || claim.formData?.estimateClaimAmount || 0;
                           const approvedAmt = claim.formData?.fin_app_amt || claim.formData?.approved_amt || claim.formData?.pre_auth_app_amt || 0;
                           
@@ -2512,10 +2581,10 @@ CRM Operations`,
                               <td className="p-4">
                                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
                                   <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse" />
-                                  RPA / Email Integration Failed
+                                  Manual Submission
                                 </span>
                                 <div className="text-[9px] text-slate-400 mt-1 max-w-xs truncate">
-                                  {claim.formData?.file_dispatch_comment || "Connection handshake timeout with TPA server; credentials mismatch."}
+                                  {claim.formData?.file_dispatch_comment || "Awaiting Finance Team submission to the insurer or TPA."}
                                 </div>
                               </td>
                               <td className="p-4 text-right">
@@ -2525,7 +2594,7 @@ CRM Operations`,
                                     className="px-3 py-1.5 rounded-xl border border-slate-300 hover:border-slate-800 text-[10px] font-bold text-slate-700 transition-all bg-white hover:bg-slate-50 cursor-pointer select-none"
                                     title="Open interactive manual action panel"
                                   >
-                                    Bypass & Open Access Panel
+                                    Open Settlement Panel
                                   </button>
                                   <button
                                     onClick={() => {

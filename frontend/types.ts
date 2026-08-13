@@ -202,6 +202,8 @@ export interface MasterDiagnosis {
 export interface Claim {
   id: string;
   caseReferenceId: string;
+  /** Server-allocated ClaimNX business identifier; never the database UUID. */
+  claimNumber?: string;
   patientId: string;
   patientName: string;
   insuranceProvider: string;

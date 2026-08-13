@@ -105,7 +105,12 @@ const LiveClaimsTracker: React.FC<LiveClaimsTrackerProps> = ({ claims, hospitalN
 
     const now = new Date();
     filtered = filtered.filter(c => {
-      const createdDate = new Date(c.createdAt);
+      // Claims from the API expose snake_case timestamps. Use the care dates
+      // for this discharge monitor, and never hide an active claim just
+      // because an older record lacks a timestamp.
+      const monitorDate = c.formData?.dis_date || c.dischargeDate || c.admissionDate || c.createdAt;
+      const createdDate = new Date(monitorDate);
+      if (Number.isNaN(createdDate.getTime())) return true;
       const diffTime = Math.abs(now.getTime() - createdDate.getTime());
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       return diffDays <= daysFilter;
