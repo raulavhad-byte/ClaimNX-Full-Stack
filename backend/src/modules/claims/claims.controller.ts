@@ -18,6 +18,10 @@ import { ClaimsService } from './claims.service';
 import { CreateClaimDto } from './dto/create-claim.dto';
 import { UpdateClaimDto } from './dto/update-claim.dto';
 import { ClaimFilterDto } from './dto/claim-filter.dto';
+import { CrmDecisionDto } from './dto/crm-decision.dto';
+import { CrmCommentDto } from './dto/crm-comment.dto';
+import { MisReportQueryDto } from './dto/mis-report-query.dto';
+import { MisReportService } from './mis-report.service';
 import type { ClaimStageActor } from './claim-stage-permissions';
 
 @Controller('claims')
@@ -25,6 +29,7 @@ import type { ClaimStageActor } from './claim-stage-permissions';
 export class ClaimsController {
   constructor(
     private readonly claimsService: ClaimsService,
+    private readonly misReportService: MisReportService,
   ) {}
 
   @Post()
@@ -41,6 +46,19 @@ export class ClaimsController {
     @CurrentUser('id') actorUserId: string,
   ) {
     return this.claimsService.findAll(filter, actorUserId);
+  }
+
+  @Get('crm/performance')
+  crmPerformance(@CurrentUser() actor: ClaimStageActor) {
+    return this.claimsService.getCrmPerformance(actor);
+  }
+
+  @Get('reports/mis')
+  misReport(
+    @Query() query: MisReportQueryDto,
+    @CurrentUser('id') actorUserId: string,
+  ) {
+    return this.misReportService.generate(query, actorUserId);
   }
 
   @Get(':id')
@@ -64,10 +82,37 @@ export class ClaimsController {
     );
   }
 
+  @Post(':id/crm/accept')
+  acceptForCrmReview(
+    @Param('id') id: string,
+    @CurrentUser() actor: ClaimStageActor,
+  ) {
+    return this.claimsService.acceptForCrmReview(id, actor);
+  }
+
+  @Post(':id/crm/comment')
+  addCrmComment(
+    @Param('id') id: string,
+    @Body() comment: CrmCommentDto,
+    @CurrentUser() actor: ClaimStageActor,
+  ) {
+    return this.claimsService.addCrmComment(id, comment, actor);
+  }
+
+  @Post(':id/crm/decision')
+  submitCrmDecision(
+    @Param('id') id: string,
+    @Body() decision: CrmDecisionDto,
+    @CurrentUser() actor: ClaimStageActor,
+  ) {
+    return this.claimsService.submitCrmDecision(id, decision, actor);
+  }
+
   @Delete(':id')
   remove(
     @Param('id') id: string,
+    @CurrentUser() actor: ClaimStageActor,
   ) {
-    return this.claimsService.remove(id);
+    return this.claimsService.remove(id, actor);
   }
 }

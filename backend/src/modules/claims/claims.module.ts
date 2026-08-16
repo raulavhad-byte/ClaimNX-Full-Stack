@@ -9,6 +9,7 @@ import { ClaimReferenceDataService } from './application/claim-reference-data.se
 import { ClaimUseCases } from './application/claim.use-cases';
 import { ClaimRepository } from './infrastructure/claim.repository';
 import { ClaimV1Controller } from './api/claim-v1.controller';
+import { MisReportService } from './mis-report.service';
 
 @Module({
   imports: [DatabaseModule],
@@ -19,6 +20,7 @@ import { ClaimV1Controller } from './api/claim-v1.controller';
     ClaimAccessService,
     ClaimReferenceDataService,
     ClaimUseCases,
+    MisReportService,
   ],
 })
 export class ClaimsModule {}

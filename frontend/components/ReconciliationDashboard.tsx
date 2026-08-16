@@ -14,6 +14,7 @@ import {
 } from '../types';
 import DownloadReportModal from './DownloadReportModal';
 import { emailTemplateService } from '../services/emailTemplateService';
+import { claimnxApi } from '../services/claimnx-api';
 import { 
   BarChart3, 
   Clock, 
@@ -159,7 +160,7 @@ const ReconciliationDashboard: React.FC<ReconciliationDashboardProps> = ({
     if (permissions.includes('all')) return true;
     return permissions.some(p => p.startsWith('claims:') || p.startsWith('edit_claims:'));
   }, [permissions]);
-  const [selectedBucket, setSelectedBucket] = useState<AgingBucket | 'All'>('All');
+  const [selectedBucket, setSelectedBucket] = useState<AgingBucket | 'All' | 'Settlement'>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedHospitals, setSelectedHospitals] = useState<string[]>([]);
   const [selectedInsurances, setSelectedInsurances] = useState<string[]>([]);
@@ -272,98 +273,61 @@ const ReconciliationDashboard: React.FC<ReconciliationDashboardProps> = ({
     return Number(c.outstandingAmount ?? c.formData?.fin_app_amt ?? 0);
   };
 
+  const isSettlementClaim = (claim: Claim) =>
+    claim.status === ClaimStatus.COMPLETE_SETTLEMENT ||
+    claim.status === ClaimStatus.PARTIAL_SETTLEMENT_RECOVERABLE ||
+    claim.status === ClaimStatus.PARTIAL_SETTLEMENT_NON_RECOVERABLE ||
+    claim.status === ClaimStatus.SETTLED ||
+    claim.settlementStatus === 'Full';
+
+  const parseAmount = (value: unknown): number => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    const normalized = String(value ?? '').replace(/[^0-9.-]/g, '');
+    const amount = Number(normalized);
+    return Number.isFinite(amount) ? amount : 0;
+  };
+
+  const formatIndianCurrencyCompact = (value: unknown): string => {
+    const amount = parseAmount(value);
+    const format = (divisor: number, suffix: string) => {
+      const compact = amount / divisor;
+      return `₹${compact.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: compact % 1 === 0 ? 0 : 2 })}${suffix}`;
+    };
+    if (amount >= 10_000_000) return format(10_000_000, ' Cr');
+    if (amount >= 100_000) return format(100_000, ' L');
+    if (amount >= 1_000) return format(1_000, ' K');
+    return `₹${amount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+  };
+
   const [nextFollowUpDate, setNextFollowUpDate] = useState<string>(new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
   const [selectedEmailForView, setSelectedEmailForView] = useState<ReminderLog | null>(null);
 
   const emailViewDocuments = useMemo(() => {
     if (!selectedEmailForView) return [];
-    
-    // Find associated claim
-    const assocClaim = claims.find(c => 
-      c.id === selectedEmailForView.claimId || 
-      c.caseReferenceId === selectedEmailForView.claimId ||
-      c.id?.toLowerCase().includes(selectedEmailForView.claimId.toLowerCase()) ||
-      selectedEmailForView.claimId.toLowerCase().includes(c.id?.toLowerCase())
-    );
+    // Sent-message files come from the backend. Never generate a fake PDF;
+    // a text payload with a .pdf extension is corrupt by definition.
+    return Array.isArray((selectedEmailForView as any).attachments)
+      ? (selectedEmailForView as any).attachments
+      : [];
+  }, [selectedEmailForView]);
 
-    const docs = assocClaim ? [
-      ...(assocClaim.history?.filter(h => h.fileData || h.stageData?.documents).flatMap(h => {
-        const dList = [];
-        if (h.fileData) {
-          dList.push({
-            name: h.fileName || 'settlement_letter.pdf',
-            data: h.fileData,
-            mimeType: 'application/pdf'
-          });
-        }
-        if (h.stageData?.documents) {
-          (h.stageData.documents as any[]).forEach(d => {
-            dList.push({
-              name: d.name || 'document.pdf',
-              data: d.data || '',
-              mimeType: d.mimeType || 'application/pdf'
-            });
-          });
-        }
-        return dList;
-      }) || []),
-      ...(assocClaim.formData?.attachedDocs || []).map((d: any) => ({
-        name: d.name || 'document.pdf',
-        data: d.data || '',
-        mimeType: d.mimeType || 'application/pdf'
-      }))
-    ] : [];
-
-    // Fallback to avoid empty attachments list if there are none in the claim
-    if (docs.length === 0) {
-      if (selectedEmailForView.claimId === 'CLM-002') {
-        return [
-          {
-            name: `Discharge_Summary_${selectedEmailForView.claimId}.pdf`,
-            data: 'data:text/plain;charset=utf-8,Mock%20Discharge%20Summary',
-            mimeType: 'application/pdf'
-          },
-          {
-            name: `Settlement_Letter_${selectedEmailForView.claimId}.pdf`,
-            data: 'data:text/plain;charset=utf-8,Mock%20Settlement%20Letter',
-            mimeType: 'application/pdf'
-          },
-          {
-            name: `Final_Bill_${selectedEmailForView.claimId}.pdf`,
-            data: 'data:text/plain;charset=utf-8,Mock%20Final%20Bill',
-            mimeType: 'application/pdf'
-          }
-        ];
-      }
-      return [
-        {
-          name: `Settlement_Letter_${selectedEmailForView.claimId}.pdf`,
-          data: 'data:text/plain;charset=utf-8,Mock%20Settlement%20Letter',
-          mimeType: 'application/pdf'
-        }
-      ];
-    }
-    return docs;
-  }, [selectedEmailForView, claims]);
-
-  const handlePreview = (fileName: string, fileData: string, mimeType: string) => {
+  const handlePreview = async (fileName: string, fileData?: string, _mimeType?: string, attachmentId?: string) => {
     try {
-      if (!fileData || !fileData.startsWith('data:')) {
-        const dataUri = 'data:text/plain;charset=utf-8,' + encodeURIComponent(`Mock PDF content for: ${fileName}\n\nClaimNX Document System`);
+      if (attachmentId) {
+        const result = await claimnxApi.get<{ url: string }>(`/email/attachments/${encodeURIComponent(attachmentId)}/download`);
+        window.open(result.url, '_blank', 'noopener,noreferrer');
+      } else if (fileData?.startsWith('data:')) {
         const link = document.createElement('a');
-        link.href = dataUri;
-        link.download = fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`;
+        link.href = fileData;
+        link.download = fileName;
         link.click();
-        toast.success(`Successfully downloaded '${fileName}'`);
+      } else {
+        toast.error(`The original file '${fileName}' is not available.`);
         return;
       }
-      const link = document.createElement('a');
-      link.href = fileData;
-      link.download = fileName;
-      link.click();
       toast.success(`Successfully downloaded '${fileName}'`);
-    } catch (e) {
-      toast.success(`Successfully downloaded '${fileName}'`);
+    } catch (e: any) {
+      toast.error(e?.message || `Unable to download '${fileName}'.`);
     }
   };
 
@@ -373,9 +337,13 @@ const ReconciliationDashboard: React.FC<ReconciliationDashboardProps> = ({
   const [isComposerBold, setIsComposerBold] = useState(false);
   const [isComposerItalic, setIsComposerItalic] = useState(false);
   const [isComposerUnderline, setIsComposerUnderline] = useState(false);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [selectedFromMailboxId, setSelectedFromMailboxId] = useState('');
   const [composerAlign, setComposerAlign] = useState<'left' | 'center' | 'right' | 'justify'>('left');
   const [composerList, setComposerList] = useState<'none' | 'bullet' | 'number'>('none');
   const [selectedEmailHospital, setSelectedEmailHospital] = useState<string>('All');
+  const [activeMailboxes, setActiveMailboxes] = useState<any[]>([]);
+  const [financeHospitals, setFinanceHospitals] = useState<any[]>([]);
   const [emailDraftData, setEmailDraftData] = useState({
     id: '',
     hospitalId: '',
@@ -387,12 +355,75 @@ const ReconciliationDashboard: React.FC<ReconciliationDashboardProps> = ({
     attachments: [] as File[]
   });
 
+  const emailHospitalOptions = useMemo(() => {
+    const options = new Map<string, { id: string; hospitalName: string }>();
+    const add = (hospital: any) => {
+      const id = String(hospital?.id ?? hospital?.hospital_id ?? '').trim();
+      if (!id) return;
+      options.set(id, {
+        id,
+        hospitalName: String(hospital?.hospitalName ?? hospital?.displayName ?? hospital?.name ?? hospital?.hospital_name ?? id),
+      });
+    };
+    hospitals.forEach(add);
+    financeHospitals.forEach(add);
+    claims.forEach((claim: any) => add({
+      id: claimHospitalId(claim),
+      hospitalName: claimHospitalName(claim),
+    }));
+    activeMailboxes.forEach((mailbox) => add({
+      id: mailbox.hospital_id,
+      hospitalName: mailbox.hospitals?.hospital_name || mailbox.hospitals?.display_name || mailbox.hospital_name,
+    }));
+    return [...options.values()].sort((left, right) => left.hospitalName.localeCompare(right.hospitalName));
+  }, [activeMailboxes, claims, financeHospitals, hospitals]);
+  const emailHospitalIdsKey = emailHospitalOptions.map((hospital) => hospital.id).join(',');
+
+  const getActiveMailboxForHospital = (hospitalId: string) => {
+    const connectedMailbox = activeMailboxes.find((account) => String(account.hospital_id) === String(hospitalId));
+    if (connectedMailbox) return connectedMailbox;
+    const selectedHospital = emailHospitalOptions.find((hospital) => String(hospital.id) === String(hospitalId));
+    const normalizedName = selectedHospital?.hospitalName.trim().toLowerCase();
+    return normalizedName
+      ? activeMailboxes.find((account) => String(account.hospitals?.hospital_name || account.hospitals?.display_name || '').trim().toLowerCase() === normalizedName)
+      : undefined;
+  };
+
+  const getActiveMailboxesForHospital = (hospitalId: string) => {
+    const exactMatches = activeMailboxes.filter((account) => String(account.hospital_id) === String(hospitalId));
+    if (exactMatches.length) return exactMatches;
+    const selectedHospital = emailHospitalOptions.find((hospital) => String(hospital.id) === String(hospitalId));
+    const normalizedName = selectedHospital?.hospitalName.trim().toLowerCase();
+    return normalizedName
+      ? activeMailboxes.filter((account) => String(account.hospitals?.hospital_name || account.hospitals?.display_name || '').trim().toLowerCase() === normalizedName)
+      : [];
+  };
+
   const getHospitalFromEmail = (hospitalId: string) => {
+    const connectedMailbox = getActiveMailboxForHospital(hospitalId);
+    if (connectedMailbox?.email_address) return connectedMailbox.email_address;
     const h = hospitals.find(h => h.id === hospitalId);
     if (!h) return 'ops@claimnx.com';
     const smtpConfig = h.smtpConfigs?.find((cfg: any) => cfg.status === "Connected") || h.smtpConfigs?.[0];
     return smtpConfig?.fromEmail || smtpConfig?.username || h.emailId || `${h.hospitalName?.toLowerCase().replace(/\s/g, "") || "hospital"}@claimnx.com`;
   };
+
+  const draftMailboxes = getActiveMailboxesForHospital(emailDraftData.hospitalId);
+  const activeDraftMailbox = draftMailboxes.find((mailbox) => mailbox.id === selectedFromMailboxId) || draftMailboxes[0];
+
+  useEffect(() => {
+    claimnxApi.get<any>('/hospitals')
+      .then((result) => setFinanceHospitals(Array.isArray(result) ? result : result?.items ?? []))
+      .catch(() => setFinanceHospitals([]));
+  }, []);
+
+  useEffect(() => {
+    const hospitalIds = emailHospitalIdsKey ? emailHospitalIdsKey.split(',') : [];
+    const query = hospitalIds.length ? `?hospitalIds=${encodeURIComponent(hospitalIds.join(','))}` : '';
+    claimnxApi.get<any[]>(`/email/mailboxes${query}`)
+      .then((accounts) => setActiveMailboxes(accounts.filter((account) => account.status === 'ACTIVE')))
+      .catch(() => setActiveMailboxes([]));
+  }, [emailHospitalIdsKey]);
 
   const handleEmailAction = (actionType: 'reply' | 'replyAll' | 'forward', emailLog: ReminderLog) => {
     const claim = claims.find(c => c.id === emailLog.claimId);
@@ -903,10 +934,19 @@ CRM Operations`,
     });
   }, [reconciliationClaims]);
 
+  const pendingAgingClaims = useMemo(
+    () => claimsWithAging.filter((claim) => !isSettlementClaim(claim)),
+    [claimsWithAging],
+  );
+  const settlementClaims = useMemo(
+    () => claimsWithAging.filter(isSettlementClaim),
+    [claimsWithAging],
+  );
+
   // Statistics
   const stats = useMemo(() => {
     const totalOutstanding = claimsWithAging.reduce((acc, c) => acc + getOutstandingAmt(c), 0);
-    const pendingCases = claimsWithAging.filter(c => c.settlementStatus !== 'Full').length;
+    const pendingCases = pendingAgingClaims.length;
     const highAgingCases = claimsWithAging.filter(c => c.agingDays > 90).length;
     const fileDispatchedCases = claimsWithAging.filter(c => c.agingBucket === 'File Dispatched').length;
     
@@ -928,7 +968,7 @@ CRM Operations`,
         const settlementDateStr = c.formData?.settlement_date || c.updatedAt;
         if (settlementDateStr) {
           const settlementDate = new Date(settlementDateStr);
-          const amount = c.paidAmount || c.formData?.fin_app_amt || 0;
+          const amount = parseAmount(c.paidAmount ?? c.formData?.set_incl_tds ?? c.formData?.fin_app_amt);
           
           if (settlementDate >= today) {
             recoveredToday += amount;
@@ -947,14 +987,18 @@ CRM Operations`,
     });
     
     // Calculate average TAT for settled claims
-    const settledClaims = accessibleClaims.filter(c => c.status === ClaimStatus.COMPLETE_SETTLEMENT && c.fileDispatchedDate && c.formData?.settlement_date);
-    const avgTAT = settledClaims.length > 0 
-      ? settledClaims.reduce((acc, c) => {
-          const start = new Date(c.fileDispatchedDate!);
-          const end = new Date(c.formData!.settlement_date);
-          return acc + (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
-        }, 0) / settledClaims.length
-      : 14.5;
+    const settlementTats = accessibleClaims
+      .filter(c => c.status === ClaimStatus.COMPLETE_SETTLEMENT || c.status === ClaimStatus.PARTIAL_SETTLEMENT_RECOVERABLE || c.status === ClaimStatus.PARTIAL_SETTLEMENT_NON_RECOVERABLE)
+      .map(c => {
+        const start = new Date(c.fileDispatchedDate || c.createdAt);
+        const end = new Date(c.formData?.settlement_date || c.updatedAt);
+        const days = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
+        return Number.isFinite(days) && days >= 0 ? days : null;
+      })
+      .filter((days): days is number => days !== null);
+    const avgTAT = settlementTats.length > 0
+      ? settlementTats.reduce((total, days) => total + days, 0) / settlementTats.length
+      : null;
 
     return {
       totalOutstanding,
@@ -965,9 +1009,58 @@ CRM Operations`,
       recoveredThisYear,
       highAgingCases,
       fileDispatchedCases,
-      avgTAT: parseFloat(avgTAT.toFixed(1))
+      avgTAT: avgTAT === null ? null : parseFloat(avgTAT.toFixed(1))
     };
-  }, [claimsWithAging, accessibleClaims]);
+  }, [claimsWithAging, accessibleClaims, pendingAgingClaims]);
+
+  // A settlement belongs to the finance user who completed it. Older records can
+  // still be attributed through the assigned reconciliation user or timeline
+  // actor, while every new settlement is explicitly assigned in
+  // handleSettlementUpdate below.
+  const mySettlementPerformance = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const weekStart = new Date(today);
+    weekStart.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const actorNames = [currentUser.displayName, currentUser.displayNameFull, currentUser.username]
+      .filter(Boolean)
+      .map((name) => String(name).trim().toLowerCase());
+
+    const mine = settlementClaims.filter((claim) =>
+      claim.assignedReconUserId === currentUser.id ||
+      (claim.history || []).some((event) => actorNames.includes(String(event.userName || '').trim().toLowerCase())),
+    );
+    const settlementDate = (claim: Claim) => new Date(claim.formData?.settlement_date || claim.updatedAt);
+    const isFrom = (claim: Claim, start: Date) => {
+      const date = settlementDate(claim);
+      return Number.isFinite(date.getTime()) && date >= start;
+    };
+    const recovery = (items: Claim[]) => items.reduce(
+      (sum, claim) => sum + parseAmount(claim.paidAmount ?? claim.formData?.set_incl_tds ?? claim.formData?.fin_app_amt),
+      0,
+    );
+    const fullSettlements = mine.filter((claim) => claim.status === ClaimStatus.COMPLETE_SETTLEMENT || claim.status === ClaimStatus.SETTLED || claim.settlementStatus === 'Full');
+    const tats = mine.map((claim) => {
+      const started = new Date(claim.fileDispatchedDate || claim.createdAt);
+      const settled = settlementDate(claim);
+      const days = (settled.getTime() - started.getTime()) / 86_400_000;
+      return Number.isFinite(days) && days >= 0 ? days : null;
+    }).filter((days): days is number => days !== null);
+    const assignedPending = pendingAgingClaims.filter((claim) => claim.assignedReconUserId === currentUser.id);
+
+    return {
+      today: mine.filter((claim) => isFrom(claim, today)),
+      thisWeek: mine.filter((claim) => isFrom(claim, weekStart)),
+      thisMonth: mine.filter((claim) => isFrom(claim, monthStart)),
+      lifetime: mine,
+      recoveredAmount: recovery(mine),
+      fullSettlementRate: mine.length ? Math.round((fullSettlements.length / mine.length) * 100) : 0,
+      averageTat: tats.length ? tats.reduce((sum, value) => sum + value, 0) / tats.length : null,
+      pendingAssigned: assignedPending.length,
+      pendingAmount: recovery(assignedPending),
+    };
+  }, [currentUser, settlementClaims, pendingAgingClaims]);
 
   // Aging Buckets Data
   const bucketData = useMemo(() => {
@@ -981,13 +1074,13 @@ CRM Operations`,
       '120+': { count: 0, amount: 0 }
     };
 
-    claimsWithAging.forEach(c => {
+    pendingAgingClaims.forEach(c => {
       buckets[c.agingBucket].count++;
       buckets[c.agingBucket].amount += (c.outstandingAmount || 0);
     });
 
     return buckets;
-  }, [claimsWithAging]);
+  }, [pendingAgingClaims]);
 
   // AI Priority Logic
   const claimsWithAi = useMemo(() => {
@@ -1259,7 +1352,11 @@ CRM Operations`,
                             claimNo.includes(searchLower) ||
                             ipdNo.includes(searchLower) ||
                             formDataStr.includes(searchLower);
-      const matchesBucket = selectedBucket === 'All' || c.agingBucket === selectedBucket;
+      const matchesBucket = selectedBucket === 'Settlement'
+        ? isSettlementClaim(c)
+        : selectedBucket === 'All'
+          ? !isSettlementClaim(c)
+          : !isSettlementClaim(c) && c.agingBucket === selectedBucket;
       const matchesHospital = selectedHospitals.length === 0 || selectedHospitals.includes(claimHospitalId(c));
       const matchesInsurance = selectedInsurances.length === 0 || selectedInsurances.includes(c.insuranceProvider);
       const matchesTpa = selectedTpas.length === 0 || selectedTpas.includes(c.formData?.tpa_provider);
@@ -1377,6 +1474,7 @@ CRM Operations`,
 
     const updatedClaim: Claim = {
       ...showSettlementModal,
+      assignedReconUserId: currentUser.id,
       settlementStatus: settlementData.status,
       paidAmount: settlementData.paidAmount,
       outstandingAmount: (showSettlementModal.formData?.fin_app_amt || 0) - settlementData.paidAmount,
@@ -1391,6 +1489,8 @@ CRM Operations`,
       status: updatedClaim.status,
       date: new Date().toISOString(),
       type: 'status_change',
+      userName: currentUser.displayName,
+      userRole: currentUser.role,
       comment: `Reconciliation Update: ${settlementData.status} Settlement. Paid: ₹${settlementData.paidAmount}. Remarks: ${settlementData.remarks}`
     };
     updatedClaim.history = [newEvent, ...updatedClaim.history];
@@ -1474,6 +1574,13 @@ CRM Operations`,
             >
               <Download size={16} className="mr-2" />
               Download Report
+            </button>
+            <button
+              onClick={() => setActiveTab('Performance')}
+              className="px-6 py-3 bg-blue-600 text-white rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg shadow-blue-900/20 hover:bg-blue-700 transition-all active:scale-95 flex items-center"
+            >
+              <Trophy size={16} className="mr-2" />
+              My Performance
             </button>
             <button 
               onClick={() => setShowManualModal(true)}
@@ -1648,14 +1755,14 @@ CRM Operations`,
           />
           <KPICard 
             label="Recovered MTD" 
-            value={`₹${(stats.recoveredThisMonth / 100000).toFixed(2)}L`} 
+            value={formatIndianCurrencyCompact(stats.recoveredThisMonth)}
             icon={TrendingUp} 
             trend="On Track" 
             trendUp={true}
           />
           <KPICard 
             label="Avg Settlement TAT" 
-            value={`${stats.avgTAT} Days`} 
+            value={stats.avgTAT === null ? '—' : `${stats.avgTAT} Days`}
             icon={BarChart3} 
             trend="-1.2 Days" 
             trendUp={true}
@@ -1678,7 +1785,7 @@ CRM Operations`,
                 <Clock size={14} /> Aging Analysis Buckets
               </h2>
               <span className="px-3 py-1 bg-[#141414] text-[#E4E3E0] rounded-full text-sm font-black uppercase tracking-widest">
-                {claimsWithAging.length} Total Pending
+                {pendingAgingClaims.length} Total Pending
               </span>
             </div>
             <button 
@@ -1688,7 +1795,7 @@ CRM Operations`,
               Reset View
             </button>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
             {(Object.keys(bucketData) as AgingBucket[]).map(bucket => (
               <button 
                 key={bucket}
@@ -1713,6 +1820,16 @@ CRM Operations`,
                 )}
               </button>
             ))}
+            <button
+              onClick={() => setSelectedBucket('Settlement')}
+              className={`p-6 rounded-2xl border transition-all text-left relative overflow-hidden group ${selectedBucket === 'Settlement' ? 'bg-emerald-600 border-emerald-600 text-white shadow-xl' : 'bg-white border-[#141414]/10 text-[#141414] hover:border-emerald-400'}`}
+            >
+              <div className="relative z-10">
+                <p className={`text-[10px] font-black uppercase tracking-widest mb-1 ${selectedBucket === 'Settlement' ? 'text-white/70' : 'text-[#141414]/40'}`}>Settlement</p>
+                <h4 className="text-2xl font-black mb-1">{settlementClaims.length}</h4>
+                <p className={`text-[10px] font-bold ${selectedBucket === 'Settlement' ? 'text-emerald-100' : 'text-emerald-600'}`}>{formatIndianCurrencyCompact(settlementClaims.reduce((total, claim) => total + parseAmount(claim.paidAmount ?? claim.formData?.set_incl_tds ?? claim.formData?.fin_app_amt), 0))}</p>
+              </div>
+            </button>
           </div>
         </div>
 
@@ -1721,17 +1838,6 @@ CRM Operations`,
           {/* Filters Bar */}
           <div className="p-8 border-b border-[#141414]/10 flex flex-col lg:flex-row lg:items-center justify-between gap-6 bg-[#F8F8F7]">
             <div className="flex flex-wrap items-center gap-4">
-              <div className="relative group">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#141414]/40 group-focus-within:text-[#141414] transition-colors" size={16} />
-                <input 
-                  type="text" 
-                  placeholder="Search Claim, UTR, IPD..." 
-                  className="pl-12 pr-4 py-3 bg-white border border-[#141414]/10 rounded-xl text-xs font-bold text-[#141414] outline-none focus:ring-4 focus:ring-[#141414]/5 focus:border-[#141414] transition-all w-full md:w-64"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
-              </div>
-              
               <MultiSelect 
                 options={hospitalOptions}
                 selected={selectedHospitals}
@@ -1753,7 +1859,18 @@ CRM Operations`,
                 placeholder="TPAs"
               />
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <div className="relative group min-w-[280px]">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#141414]/40 group-focus-within:text-[#141414] transition-colors" size={17} />
+                <input
+                  type="text"
+                  placeholder="Search patient, claim no., UTR, IPD, insurer..."
+                  className="w-full pl-12 pr-10 py-3 bg-white border border-[#141414]/15 rounded-xl text-xs font-bold text-[#141414] outline-none focus:ring-4 focus:ring-emerald-100 focus:border-emerald-600 transition-all shadow-sm"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+                {searchQuery && <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"><X size={14} /></button>}
+              </div>
               <button 
                 onClick={() => handleExcelDownload(filteredClaims)}
                 className="p-3 bg-white border border-[#141414]/10 rounded-xl text-[#141414]/60 hover:text-[#141414] hover:border-[#141414] transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest"
@@ -1860,15 +1977,7 @@ CRM Operations`,
                       </p>
                     </td>
                     <td className="px-4 py-6">
-                      <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border whitespace-nowrap ${
-                        claim.status === ClaimStatus.COMPLETE_SETTLEMENT
-                          ? 'bg-emerald-600 text-white border-emerald-700 shadow-sm'
-                          : claim.settlementStatus === 'Full'
-                          ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
-                          : claim.settlementStatus === 'Partial'
-                            ? 'bg-amber-50 text-amber-600 border-amber-200'
-                            : 'bg-slate-50 text-slate-400 border-slate-200'
-                      }`}>
+                      <span className="px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border whitespace-nowrap bg-emerald-600 text-white border-emerald-700 shadow-sm">
                         {claim.status || claim.settlementStatus || 'Pending'}
                       </span>
                     </td>
@@ -2651,7 +2760,7 @@ CRM Operations`,
                       onChange={(e) => setSelectedEmailHospital(e.target.value)}
                     >
                       <option value="All">All Hospitals</option>
-                      {hospitals.map(h => (
+                      {emailHospitalOptions.map(h => (
                         <option key={h.id} value={h.id}>{h.hospitalName}</option>
                       ))}
                     </select>
@@ -2677,6 +2786,25 @@ CRM Operations`,
                   <PlusCircle size={16} className="mr-2" />
                   Draft New Email
                 </button>
+              </div>
+
+              <div className="px-8 py-4 bg-emerald-50/50 border-b border-emerald-100 flex flex-wrap items-center gap-3">
+                <span className="text-[10px] font-black uppercase tracking-widest text-emerald-800">Active hospital mailboxes</span>
+                {activeMailboxes
+                  .filter((mailbox) => selectedEmailHospital === 'All' || String(mailbox.hospital_id) === String(selectedEmailHospital))
+                  .map((mailbox) => {
+                    const hospital = emailHospitalOptions.find((item) => String(item.id) === String(mailbox.hospital_id));
+                    return (
+                      <div key={mailbox.id} className="inline-flex items-center gap-2 px-3 py-2 bg-white border border-emerald-200 rounded-xl text-[10px] font-bold text-slate-700 shadow-sm">
+                        <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                        <span>{hospital?.hospitalName || 'Hospital'}:</span>
+                        <span className="text-emerald-700">{mailbox.email_address}</span>
+                      </div>
+                    );
+                  })}
+                {activeMailboxes.filter((mailbox) => selectedEmailHospital === 'All' || String(mailbox.hospital_id) === String(selectedEmailHospital)).length === 0 && (
+                  <span className="text-[10px] font-bold text-slate-500">No active mailbox is connected for the selected hospital.</span>
+                )}
               </div>
 
               {/* Horizontally tabbed folders bar for Reconciliation dashboard */}
@@ -2867,6 +2995,49 @@ CRM Operations`,
 
         {activeTab === 'Performance' && (
           <div className="space-y-8">
+            <section className="bg-[#141414] text-white rounded-[2.5rem] p-8 shadow-2xl">
+              <div className="flex flex-col md:flex-row md:items-start justify-between gap-5 mb-7">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-300">My Performance</p>
+                  <h2 className="text-2xl font-black uppercase tracking-tight mt-1">{currentUser.displayName}'s settlement desk</h2>
+                  <p className="text-xs text-white/55 mt-2">Only settlements recorded by you are included in these figures.</p>
+                </div>
+                <div className="px-5 py-3 rounded-2xl bg-white/10 border border-white/10">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-white/50">Recovered by you</p>
+                  <p className="text-xl font-black text-emerald-300 mt-1">{formatIndianCurrencyCompact(mySettlementPerformance.recoveredAmount)}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {[
+                  { label: 'Today', claims: mySettlementPerformance.today },
+                  { label: 'This Week', claims: mySettlementPerformance.thisWeek },
+                  { label: 'This Month', claims: mySettlementPerformance.thisMonth },
+                  { label: 'Lifetime', claims: mySettlementPerformance.lifetime },
+                ].map(({ label, claims }) => (
+                  <div key={label} className="rounded-2xl bg-white/10 border border-white/10 p-5">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-white/50">{label} settlements</p>
+                    <p className="text-2xl font-black mt-2">{claims.length}</p>
+                    <p className="text-xs font-bold text-emerald-300 mt-1">{formatIndianCurrencyCompact(claims.reduce((sum, claim) => sum + parseAmount(claim.paidAmount ?? claim.formData?.set_incl_tds ?? claim.formData?.fin_app_amt), 0))}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                <div className="rounded-2xl bg-blue-500/15 border border-blue-400/20 p-5">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-blue-200">Full settlement rate</p>
+                  <p className="text-xl font-black mt-2">{mySettlementPerformance.fullSettlementRate}%</p>
+                </div>
+                <div className="rounded-2xl bg-amber-500/15 border border-amber-400/20 p-5">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-amber-200">Average settlement TAT</p>
+                  <p className="text-xl font-black mt-2">{mySettlementPerformance.averageTat === null ? '—' : `${mySettlementPerformance.averageTat.toFixed(1)} days`}</p>
+                </div>
+                <div className="rounded-2xl bg-violet-500/15 border border-violet-400/20 p-5">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-violet-200">My pending settlement queue</p>
+                  <p className="text-xl font-black mt-2">{mySettlementPerformance.pendingAssigned} cases</p>
+                  <p className="text-xs font-bold text-violet-200 mt-1">{formatIndianCurrencyCompact(mySettlementPerformance.pendingAmount)} outstanding</p>
+                </div>
+              </div>
+            </section>
+
             {/* Forecast Summary */}
             {settings.enableForecasting && (
               <div className="bg-emerald-50 rounded-[2.5rem] border border-emerald-200 p-8 shadow-xl">
@@ -2902,28 +3073,28 @@ CRM Operations`,
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               <KPICard 
                 label="Daily Recovery" 
-                value={`₹${(stats.recoveredToday / 1000).toFixed(0)}K`}
+                value={formatIndianCurrencyCompact(stats.recoveredToday)}
                 icon={Activity} 
                 trend={`${((stats.recoveredToday / settings.recoveryTargets.daily) * 100).toFixed(1)}%`}
                 trendUp={true}
               />
               <KPICard 
                 label="Weekly Recovery" 
-                value={`₹${(stats.recoveredThisWeek / 1000).toFixed(0)}K`}
+                value={formatIndianCurrencyCompact(stats.recoveredThisWeek)}
                 icon={TrendingUp} 
                 trend={`${((stats.recoveredThisWeek / settings.recoveryTargets.weekly) * 100).toFixed(1)}%`}
                 trendUp={true}
               />
               <KPICard 
                 label="Monthly Recovery" 
-                value={`₹${(stats.recoveredThisMonth / 1000000).toFixed(1)}M`}
+                value={formatIndianCurrencyCompact(stats.recoveredThisMonth)}
                 icon={Target} 
                 trend={`${((stats.recoveredThisMonth / settings.recoveryTargets.monthly) * 100).toFixed(1)}%`}
                 trendUp={true}
               />
               <KPICard 
                 label="Yearly Recovery" 
-                value={`₹${(stats.recoveredThisYear / 1000000).toFixed(1)}M`}
+                value={formatIndianCurrencyCompact(stats.recoveredThisYear)}
                 icon={Trophy} 
                 trendUp={true}
               />
@@ -3804,19 +3975,33 @@ CRM Operations`,
                         <select 
                           className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none cursor-pointer border-b border-transparent hover:border-slate-200 py-0.5"
                           value={emailDraftData.hospitalId}
-                          onChange={(e) => setEmailDraftData(prev => ({ ...prev, hospitalId: e.target.value }))}
+                          onChange={(e) => {
+                            setSelectedFromMailboxId('');
+                            setEmailDraftData(prev => ({ ...prev, hospitalId: e.target.value }));
+                          }}
                         >
                           <option value="">Select a hospital...</option>
-                          {hospitals.map(h => (
+                          {emailHospitalOptions.map(h => (
                             <option key={h.id} value={h.id}>{h.hospitalName}</option>
                           ))}
                         </select>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-bold text-slate-400 uppercase tracking-wider shrink-0">From</span>
-                        <span className="text-sm font-semibold text-slate-600 truncate bg-slate-50 px-2.5 py-1 rounded-md">
-                          {getHospitalFromEmail(emailDraftData.hospitalId)}
-                        </span>
+                        {draftMailboxes.length > 0 ? (
+                          <select
+                            value={activeDraftMailbox?.id || ''}
+                            onChange={(event) => setSelectedFromMailboxId(event.target.value)}
+                            className="min-w-0 flex-1 bg-emerald-50 text-emerald-800 border border-emerald-100 rounded-md px-2.5 py-1 text-sm font-semibold outline-none cursor-pointer"
+                            title="Select the integrated hospital mailbox used to send this email"
+                          >
+                            {draftMailboxes.map((mailbox) => <option key={mailbox.id} value={mailbox.id}>{mailbox.email_address}</option>)}
+                          </select>
+                        ) : (
+                          <span className="text-sm font-semibold text-amber-700 truncate bg-amber-50 px-2.5 py-1 rounded-md border border-amber-100">
+                            No active integrated email
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -3977,31 +4162,78 @@ CRM Operations`,
                     <div className="flex flex-wrap items-center gap-2">
                       {/* Send Button */}
                       <button 
-                        onClick={() => {
-                          if (!emailDraftData.to || !emailDraftData.subject) {
-                            toast.error('Please fulfill recipient and subject lines.');
+                        disabled={isSendingEmail}
+                        onClick={async () => {
+                          if (!emailDraftData.hospitalId || !emailDraftData.to || !emailDraftData.subject || !emailDraftData.body.trim()) {
+                            toast.error('Select a hospital and complete recipient, subject, and email body.');
                             return;
                           }
-                          const subjectClaimId = emailDraftData.subject.match(/CLM-\d+/i)?.[0] || 'CLM-003';
-                          const newLog: ReminderLog = {
-                            id: `log-${Date.now()}`,
-                            claimId: subjectClaimId,
-                            sentDate: new Date().toISOString(),
-                            recipient: emailDraftData.to,
-                            recipientType: 'Insurer',
-                            status: 'Sent',
-                            templateUsed: 'Standard'
-                          };
-                          setReminderLogs(prev => [newLog, ...prev]);
-                          const senderEmail = getHospitalFromEmail(emailDraftData.hospitalId);
-                          toast.success(`Email sent successfully from ${senderEmail}`);
-                          setShowEmailDraftModal(false);
-                          setIsComposerMinimized(false);
-                          setIsComposerMaximized(false);
+                          const mailbox = activeDraftMailbox;
+                          if (!mailbox) {
+                            toast.error('No active integrated mailbox is available for the selected hospital.');
+                            return;
+                          }
+                          setIsSendingEmail(true);
+                          try {
+                            const subjectClaimId = emailDraftData.subject.match(/CLM-\d+/i)?.[0];
+                            const attachments = await Promise.all(emailDraftData.attachments.map(async (file) => {
+                              if (file.size > 25 * 1024 * 1024) throw new Error(`${file.name} exceeds the 25 MB attachment limit.`);
+                              const dataUrl = await new Promise<string>((resolve, reject) => {
+                                const reader = new FileReader();
+                                reader.onerror = () => reject(new Error(`Unable to read ${file.name}.`));
+                                reader.onload = () => resolve(String(reader.result));
+                                reader.readAsDataURL(file);
+                              });
+                              return {
+                                filename: file.name,
+                                contentType: file.type || 'application/octet-stream',
+                                contentBase64: dataUrl.split(',')[1] || '',
+                              };
+                            }));
+                            const result = await claimnxApi.post<{ fromAddress: string; messageId: string; attachments: { id: string; filename: string; contentType: string; sizeBytes: number }[] }> (`/email/mailboxes/${encodeURIComponent(mailbox.id)}/send`, {
+                              to: emailDraftData.to.split(',').map((email) => email.trim()).filter(Boolean),
+                              cc: emailDraftData.cc.split(',').map((email) => email.trim()).filter(Boolean),
+                              bcc: emailDraftData.bcc.split(',').map((email) => email.trim()).filter(Boolean),
+                              subject: emailDraftData.subject,
+                              plainTextBody: emailDraftData.body,
+                              claimId: subjectClaimId,
+                              attachments,
+                            });
+                            saveEmailsToStorage([{
+                              id: `email-sent-${Date.now()}`,
+                              claimId: subjectClaimId || 'N/A',
+                              sentDate: new Date().toISOString(),
+                              sender: result.fromAddress,
+                              recipient: emailDraftData.to,
+                              recipientType: 'Insurer',
+                              subject: emailDraftData.subject,
+                              body: emailDraftData.body,
+                              status: 'Sent',
+                              templateUsed: 'Finance draft',
+                              hospitalId: emailDraftData.hospitalId,
+                              messageId: result.messageId,
+                              cc: emailDraftData.cc,
+                              bcc: emailDraftData.bcc,
+                              attachments: result.attachments.map((attachment) => ({
+                                name: attachment.filename,
+                                mimeType: attachment.contentType,
+                                sizeBytes: attachment.sizeBytes,
+                                attachmentId: attachment.id,
+                              })),
+                            }, ...emailsDb]);
+                            toast.success(`Email sent successfully from ${result.fromAddress}`);
+                            setShowEmailDraftModal(false);
+                            setIsComposerMinimized(false);
+                            setIsComposerMaximized(false);
+                          } catch (error: any) {
+                            toast.error(error?.message || 'Email could not be sent from the hospital mailbox.');
+                          } finally {
+                            setIsSendingEmail(false);
+                          }
                         }}
-                        className="px-6 py-2.5 bg-blue-700 hover:bg-blue-800 text-white font-bold text-xs uppercase tracking-wider rounded-full flex items-center gap-1.5 transition-all shadow-md cursor-pointer active:scale-95"
+                        className="px-6 py-2.5 bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white font-bold text-xs uppercase tracking-wider rounded-full flex items-center gap-1.5 transition-all shadow-md cursor-pointer active:scale-95"
                       >
-                        Send
+                        {isSendingEmail ? 'Sending…' : 'Send'}
                       </button>
 
                       {/* Discard Button beside Send */}
@@ -4082,7 +4314,7 @@ CRM Operations`,
                   <div className="grid grid-cols-2 gap-6 bg-[#F8F8F7] p-5 rounded-xl border border-[#141414]/5">
                     <div>
                       <p className="text-[11px] font-black text-[#141414]/40 uppercase tracking-widest mb-1">From</p>
-                      <p className="text-sm font-semibold text-slate-800">Reconciliation Team (ClaimNX)</p>
+                      <p className="text-sm font-semibold text-slate-800">{(selectedEmailForView as any).sender || 'Reconciliation Team (ClaimNX)'}</p>
                     </div>
                     <div>
                       <p className="text-[11px] font-black text-[#141414]/40 uppercase tracking-widest mb-1">To</p>
@@ -4091,20 +4323,11 @@ CRM Operations`,
                   </div>
                   <div className="bg-[#F8F8F7] p-5 rounded-xl border border-[#141414]/5">
                     <p className="text-[11px] font-black text-[#141414]/40 uppercase tracking-widest mb-1">Subject</p>
-                    <p className="text-base font-black text-[#141414]">{selectedEmailForView.templateUsed} - Claim {selectedEmailForView.claimId}</p>
+                    <p className="text-base font-black text-[#141414]">{(selectedEmailForView as any).subject || `${selectedEmailForView.templateUsed} - Claim ${selectedEmailForView.claimId}`}</p>
                   </div>
                   <div className="p-8 bg-[#F8F8F7] rounded-2xl border border-[#141414]/5 min-h-[320px] shadow-sm flex flex-col">
                     <p className="text-sm font-medium text-[#141414]/80 leading-relaxed whitespace-pre-wrap select-text flex-1">
-                      Dear {selectedEmailForView.recipientType} Team,
-                      {"\n\n"}
-                      This is a follow-up regarding the outstanding settlement for Claim NO: {selectedEmailForView.claimId}.
-                      As per our records, the file was dispatched on {formatDate(claimsWithAging.find(c => c.id === selectedEmailForView.claimId)?.fileDispatchedDate || new Date())}.
-                      {"\n\n"}
-                      Kindly provide an update on the settlement status at the earliest.
-                      {"\n\n"}
-                      Regards,
-                      {"\n"}
-                      Reconciliation Team
+                      {(selectedEmailForView as any).body || `No email body was recorded for this legacy message.`}
                     </p>
                   </div>
 
@@ -4154,7 +4377,7 @@ CRM Operations`,
                             </div>
                           </div>
                           <button
-                            onClick={() => handlePreview(emailViewDocuments[0].name, emailViewDocuments[0].data, emailViewDocuments[0].mimeType)}
+                            onClick={() => handlePreview(emailViewDocuments[0].name, emailViewDocuments[0].data, emailViewDocuments[0].mimeType, emailViewDocuments[0].attachmentId)}
                             className="px-4 py-2 bg-slate-200 hover:bg-[#141414] hover:text-[#E4E3E0] text-[#141414]/80 text-xs font-black uppercase tracking-wider rounded-lg transition-all flex items-center gap-1.5"
                           >
                             <Download size={14} /> Download
@@ -4167,7 +4390,7 @@ CRM Operations`,
                             <div key={idx} className="flex items-center gap-2 p-3 bg-[#F8F8F7] border border-[#141414]/10 rounded-xl hover:bg-[#141414]/5 transition-all">
                               <FileText size={14} className="text-rose-500 shrink-0" />
                               <button
-                                onClick={() => handlePreview(doc.name, doc.data, doc.mimeType)}
+                                onClick={() => handlePreview(doc.name, doc.data, doc.mimeType, doc.attachmentId)}
                                 className="text-sm font-semibold text-blue-600 hover:text-blue-800 text-left hover:underline truncate flex-1"
                                 title={`Click to download ${doc.name}`}
                               >
@@ -4187,7 +4410,7 @@ CRM Operations`,
                 <button 
                   onClick={() => {
                     emailViewDocuments.forEach(doc => {
-                      handlePreview(doc.name, doc.data, doc.mimeType);
+                      handlePreview(doc.name, doc.data, doc.mimeType, doc.attachmentId);
                     });
                     toast.success(`${emailViewDocuments.length} document(s) download initiated`);
                   }}

@@ -1756,11 +1756,14 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
     const initialStatus = medicalScrutinyRequired
       ? ClaimStatus.PENDING_MEDICAL_REVIEW
       : ClaimStatus.PRE_AUTH_INITIATED;
+    const resumedDraft = id ? claims.find((existingClaim) => existingClaim.id === id) : undefined;
 
     const newClaim: Claim = {
-      id: id || `CL-${Date.now()}`,
-      caseReferenceId: `REF-${Math.floor(Math.random() * 999999)}`,
-      patientId: `P-${Math.floor(Math.random() * 9999)}`,
+      ...resumedDraft,
+      id: resumedDraft?.id || id || `CL-${Date.now()}`,
+      caseReferenceId: resumedDraft?.caseReferenceId || `REF-${Math.floor(Math.random() * 999999)}`,
+      claimNumber: resumedDraft?.claimNumber,
+      patientId: resumedDraft?.patientId || `P-${Math.floor(Math.random() * 9999)}`,
       patientName: finalFormData.p_name || "New Patient",
       insuranceProvider:
         finalFormData.insurance_company || "Insurance Provider",
@@ -1773,8 +1776,8 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
       caseSource: isHospitalInitiated ? 'Hospital' : 'Internal User',
       product: finalFormData.product || Product.CPC,
       status: initialStatus,
-      createdBy: currentUser.id,
-      createdAt: new Date().toISOString(),
+      createdBy: resumedDraft?.createdBy || currentUser.id,
+      createdAt: resumedDraft?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       hospitalId: activeHospitalId,
       formData: {
@@ -1789,6 +1792,7 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
         doctorStamp: currentUser.doctorStamp,
       },
       history: [
+        ...(resumedDraft?.history || []),
         {
           id: `ev-wiz-${Date.now()}`,
           status: initialStatus,
@@ -1796,7 +1800,7 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
           type: "admission",
           userName: currentUser.displayName || currentUser.username || "System",
           userRole: currentUser.role || 'Hospital User',
-          comment: "New Cashless Admission submitted. Case flow initiated simultaneously to Medical Underwriting and Policy Audit Team.",
+          comment: resumedDraft ? "Saved draft resumed and submitted for processing." : "New Cashless Admission submitted. Case flow initiated simultaneously to Medical Underwriting and Policy Audit Team.",
           stageData: {
             // Binary data is uploaded only after the claim has a database UUID.
             // Keeping it out of claim state also prevents oversized JSON requests.

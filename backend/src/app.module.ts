@@ -26,6 +26,8 @@ import { TenantModule } from './modules/tenant/tenant.module';
 import { WorkflowModule } from './modules/workflow/workflow.module';
 import { FinancialModule } from './modules/financial/financial.module';
 import { AutomationModule } from './modules/automation/automation.module';
+import { EmailModule } from './modules/email/email.module';
+
 
 
 @Module({
@@ -55,6 +57,7 @@ import { AutomationModule } from './modules/automation/automation.module';
   WorkflowModule,
   UsersModule,
   SharedModule,
+  EmailModule
 ],
 })
 export class AppModule implements NestModule {

@@ -1,0 +1,60 @@
+﻿backend/src\modules\claims\claim-stage-permissions.ts:73:  return `stage_permissions:stage_${stageKey}:update`;
+backend/src\modules\claims\claim-stage-permissions.spec.ts:8:    expect(getStageUpdatePermission('Pending Medical Review')).toBe(
+backend/src\modules\claims\claim-stage-permissions.spec.ts:9:      'stage_permissions:stage_pending_medical_review:update',
+backend/src\modules\claims\claim-stage-permissions.spec.ts:12:      'stage_permissions:stage_discharged_approved:update',
+backend/src\modules\claims\claim-stage-permissions.spec.ts:15:      'stage_permissions:stage_discharge_query_reply:update',
+backend/src\modules\claims\claim-stage-permissions.spec.ts:24:        'stage_permissions:stage_pending_medical_review:update',
+backend/src\modules\claims\claim-stage-permissions.spec.ts:26:    }, 'Pending Medical Review')).toBe(true);
+backend/src\modules\claims\claim-stage-permissions.spec.ts:34:    }, 'Pending Medical Review')).toBe(false);
+backend/src\modules\claims\claim-stage-permissions.spec.ts:42:    }, 'Pending Medical Review')).toBe(true);
+frontend\App.tsx:2011:     // Map cashless phase access control (stage_access:phases:*) to granular stage permissions (stage_permissions:stage_*:update)
+frontend\App.tsx:2013:       perms.push('stage_permissions:stage_pre-auth:update');
+frontend\App.tsx:2014:       perms.push('stage_permissions:stage_pending_medical_review:update');
+frontend\App.tsx:2015:       perms.push('stage_permissions:stage_pending_medical_team:update');
+frontend\App.tsx:2016:       perms.push('stage_permissions:stage_medical_query_raised:update');
+frontend\App.tsx:2017:       perms.push('stage_permissions:stage_medical_query_replied:update');
+frontend\App.tsx:2018:       perms.push('stage_permissions:stage_pre_auth_initiated:update');
+frontend\App.tsx:2019:       perms.push('stage_permissions:stage_pre_auth_approved:update');
+frontend\App.tsx:2020:       perms.push('stage_permissions:stage_initial_query_pending:update');
+frontend\App.tsx:2021:       perms.push('stage_permissions:stage_query_reply_done:update');
+frontend\App.tsx:2022:       perms.push('stage_permissions:stage_pre_auth_rejected:update');
+frontend\App.tsx:2023:       perms.push('stage_permissions:stage_enhancement_initiated:update');
+frontend\App.tsx:2024:       perms.push('stage_permissions:stage_enhancement_approved:update');
+frontend\App.tsx:2025:       perms.push('stage_permissions:stage_enhancement_query_raised:update');
+frontend\App.tsx:2026:       perms.push('stage_permissions:stage_enhancement_query_resolved:update');
+frontend\App.tsx:2027:       perms.push('stage_permissions:stage_enhancement_rejected:update');
+frontend\App.tsx:2030:       perms.push('stage_permissions:stage_discharge:update');
+frontend\App.tsx:2031:       perms.push('stage_permissions:stage_discharge_initiated:update');
+frontend\App.tsx:2032:       perms.push('stage_permissions:stage_discharge_query_raised:update');
+frontend\App.tsx:2033:       perms.push('stage_permissions:stage_discharge_query_reply:update');
+frontend\App.tsx:2034:       perms.push('stage_permissions:stage_discharge_rejected:update');
+frontend\App.tsx:2035:       perms.push('stage_permissions:stage_discharged_approved:update');
+frontend\App.tsx:2036:       perms.push('stage_permissions:stage_discharge_reconsideration_raised:update');
+frontend\App.tsx:2037:       perms.push('stage_permissions:stage_discharge_reconsideration_approved:update');
+frontend\App.tsx:2040:       perms.push('stage_permissions:stage_settlement:update');
+frontend\App.tsx:2041:       perms.push('stage_permissions:stage_file_dispatch_pending:update');
+frontend\App.tsx:2042:       perms.push('stage_permissions:stage_file_dispatched:update');
+frontend\App.tsx:2043:       perms.push('stage_permissions:stage_claim_under_process:update');
+frontend\App.tsx:2044:       perms.push('stage_permissions:stage_claim_under_query:update');
+frontend\App.tsx:2045:       perms.push('stage_permissions:stage_claim_query_resolved:update');
+frontend\App.tsx:2046:       perms.push('stage_permissions:stage_claim_approved:update');
+frontend\App.tsx:2047:       perms.push('stage_permissions:stage_partially_claim_settled_recoverable:update');
+frontend\App.tsx:2048:       perms.push('stage_permissions:stage_partially_claim_settled_non_recoverable:update');
+frontend\App.tsx:2049:       perms.push('stage_permissions:stage_complete_settlement:update');
+frontend\App.tsx:2050:       perms.push('stage_permissions:stage_settlement_failed:update');
+frontend\App.tsx:2051:       perms.push('stage_permissions:stage_account_reconciliation:update');
+frontend\App.tsx:2052:       perms.push('stage_permissions:stage_bank_reconciliation_completed:update');
+frontend\App.tsx:2224:    if (navKey.startsWith('stage_permissions:')) {
+frontend\App.tsx:2304:    return currentUserPermissions.includes(`stage_permissions:stage_${stageKey}:update`);
+frontend\types.ts:4:  PENDING_MEDICAL_REVIEW = 'Pending Medical Review',
+frontend\types.ts:1229:      { status: ClaimStatus.PENDING_MEDICAL_REVIEW, label: 'Pending Medical Review', key: 'pending_medical_review' },
+frontend\services\api.ts:414:  READY_FOR_REVIEW: 'Pending Medical Review',
+frontend\services\api.ts:415:  PENDING_MEDICAL_REVIEW: 'Pending Medical Review',
+frontend\components\ClaimProcessCenter.tsx:1858:      // Ensure Medical Query Reply moves to Pending Medical Review per new requirement
+frontend\components\ManageRoles.tsx:246:        id: 'stage_permissions',
+frontend\components\PatientDashboard.tsx:391:      canAccess(`stage_permissions:stage_${currentStageKey}:update`);
+frontend\components\PatientDashboard.tsx:975:        // User update: medical query replied should move to Pending Medical Review or PRE_AUTH_INITIATED if scrutiny is disabled
+frontend\components\ReimbursementDashboard.tsx:458:            'Pending Medical Review',
+frontend\components\ReimbursementDashboard.tsx:700:              'Pending Medical Review',
+frontend\components\ReimbursementDashboard.tsx:1652:      if (s === ClaimStatus.KYP_PENDING || s === 'Pending' || s === 'Pending (KYP)' || s === ClaimStatus.PENDING_MEDICAL_REVIEW || s === 'Pending Medical Review' || s === ClaimStatus.NEW_REGISTRATION || s === 'New Registration') return 'Pending';
+frontend\components\UserManagement.tsx:3090:                                      value: "Pending Medical Review",

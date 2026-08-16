@@ -65,6 +65,8 @@ import FollowUpEmailModal from "./FollowUpEmailModal";
 import { emailTemplateService } from "../services/emailTemplateService";
 import { EmailTemplate } from "./EmailTemplatesManager";
 import { motion, AnimatePresence } from "motion/react";
+import { claimsApi } from "../services/api";
+import { toast } from "sonner";
 
 interface CashlessDashboardProps {
   claims: Claim[];
@@ -381,9 +383,27 @@ const CashlessDashboard: React.FC<CashlessDashboardProps> = ({
   tpas = [],
 }) => {
   const navigate = useNavigate();
+  const [deletingDraftId, setDeletingDraftId] = useState<string | null>(null);
+  const [draftPendingDelete, setDraftPendingDelete] = useState<Claim | null>(null);
   const location = useLocation();
   const searchParams = new URLSearchParams(location.search);
   const targetProduct = searchParams.get('product');
+
+  const handleDeleteDraft = async () => {
+    const claim = draftPendingDelete;
+    if (!claim) return;
+    setDeletingDraftId(claim.id);
+    try {
+      await claimsApi.delete(claim.id);
+      setClaims?.((current) => current.filter((item) => item.id !== claim.id));
+      setDraftPendingDelete(null);
+      toast.success('Draft claim permanently deleted.');
+    } catch (error: any) {
+      toast.error(error?.message || 'Unable to delete draft claim.');
+    } finally {
+      setDeletingDraftId(null);
+    }
+  };
 
   // Claim reads are tenant/geography scoped by the backend. Stage permissions
   // govern transitions only and must never hide otherwise-visible claims.
@@ -1999,12 +2019,22 @@ Sub-Limits: ${kyp.subLimits || "N/A"}
                                 </button>
                               )}
                               {claim.status === ClaimStatus.DRAFT ? (
-                                <Link
-                                  to={`/edit-claim/${claim.id}`}
-                                  className="inline-flex items-center justify-center w-32 px-5 py-2.5 bg-amber-500 border border-amber-600 rounded-xl text-[10px] font-black uppercase tracking-wider text-white hover:bg-amber-600 transition-all shadow-lg active:scale-95"
-                                >
-                                  RESUME CASE
-                                </Link>
+                                <>
+                                  <Link
+                                    to={`/edit-claim/${claim.id}`}
+                                    className="inline-flex items-center justify-center w-32 px-5 py-2.5 bg-amber-500 border border-amber-600 rounded-xl text-[10px] font-black uppercase tracking-wider text-white hover:bg-amber-600 transition-all shadow-lg active:scale-95"
+                                  >
+                                    RESUME CASE
+                                  </Link>
+                                  <button
+                                    type="button"
+                                    onClick={() => setDraftPendingDelete(claim)}
+                                    disabled={deletingDraftId === claim.id}
+                                    className="inline-flex items-center justify-center px-4 py-2.5 bg-rose-50 border border-rose-200 rounded-xl text-[10px] font-black uppercase tracking-wider text-rose-600 hover:bg-rose-600 hover:text-white transition-all disabled:opacity-50"
+                                  >
+                                    {deletingDraftId === claim.id ? 'Deleting…' : 'Delete'}
+                                  </button>
+                                </>
                               ) : (
                                 <Link
                                   to={`/process-claim/${claim.id}?source=cashless`}
@@ -2418,6 +2448,22 @@ Sub-Limits: ${kyp.subLimits || "N/A"}
             </div>
           </div>
         )}
+        <AnimatePresence>
+          {draftPendingDelete && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm">
+              <motion.div initial={{ opacity: 0, scale: 0.94, y: 16 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.94, y: 16 }} className="w-full max-w-md bg-white rounded-[2rem] p-8 shadow-2xl text-center">
+                <div className="w-14 h-14 mx-auto mb-5 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center"><AlertTriangle size={28} /></div>
+                <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Confirm Deletion</h3>
+                <p className="text-[10px] font-black text-rose-600 uppercase tracking-widest mt-1">This action is permanent</p>
+                <p className="text-sm text-slate-600 leading-relaxed mt-4">Are you sure you want to delete this draft claim? Its documents and history will be permanently removed from the system.</p>
+                <div className="grid grid-cols-2 gap-3 mt-7">
+                  <button type="button" onClick={handleDeleteDraft} disabled={deletingDraftId === draftPendingDelete.id} className="py-3 bg-rose-600 text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-rose-700 disabled:opacity-60">{deletingDraftId === draftPendingDelete.id ? 'Deleting…' : 'Delete Permanently'}</button>
+                  <button type="button" onClick={() => setDraftPendingDelete(null)} disabled={deletingDraftId === draftPendingDelete.id} className="py-3 bg-white border border-slate-200 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-50">Cancel</button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

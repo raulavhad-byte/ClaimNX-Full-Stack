@@ -1746,6 +1746,21 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
       }
     }
 
+    const isRecoverableSettlement =
+      pendingStatus === ClaimStatus.PARTIAL_SETTLEMENT_RECOVERABLE ||
+      localFormData.target_settlement_status === ClaimStatus.PARTIAL_SETTLEMENT_RECOVERABLE;
+    if (isRecoverableSettlement && safeFloat(localFormData.set_partial_amt) > 0) {
+      const reason = String(localFormData.partial_remark_type || '').trim();
+      if (!reason) {
+        setValidationError('Partially Settled Reason is mandatory for a recoverable partial settlement.');
+        return;
+      }
+      if (reason === 'Other' && !String(localFormData.partial_remark_other_comment || '').trim()) {
+        setValidationError('Please specify the partial settlement reason when Other is selected.');
+        return;
+      }
+    }
+
     if (pendingStatus === ClaimStatus.FILE_DISPATCHED && !isPartnerProcessing) {
       if (!localFormData.file_dispatched_declaration) {
         setValidationError(
@@ -2035,6 +2050,13 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
         if (localFormData.cancellation_declaration) {
           commentVal += " (Cancellation Declaration Accepted - Auto-email/RPA sent)";
         }
+      }
+
+      if (targetStatus === ClaimStatus.PARTIAL_SETTLEMENT_RECOVERABLE) {
+        const reason = localFormData.partial_remark_type;
+        const otherReason = String(localFormData.partial_remark_other_comment || '').trim();
+        const reasonText = reason === 'Other' ? `Other: ${otherReason}` : reason;
+        commentVal = `Partial settlement reason: ${reasonText}.${localFormData.comment ? ` Remarks: ${localFormData.comment}` : ''}`;
       }
 
       const isFileDispatchedDeclTicked = !!localFormData.file_dispatched_declaration;
@@ -4207,6 +4229,11 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                             "Tariff Deductions",
                             "Discount on Package",
                             "Non Medical Expenses",
+                            "Reasonable & Customary Clause",
+                            "Co-payment",
+                            "Investigation Charges",
+                            "SI Exhausted",
+                            "Other",
                           ]
                         : [
                             "Tariff Deductions",
@@ -4238,6 +4265,16 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                               ))}
                             </select>
                           </InputGroup>
+                          {isRecoverable && localFormData.partial_remark_type === "Other" && (
+                            <InputGroup label="Specify other partial settlement reason" required>
+                              <textarea
+                                value={localFormData.partial_remark_other_comment || ""}
+                                onChange={(e) => handleLocalInputChange("partial_remark_other_comment", e.target.value)}
+                                placeholder="Enter the reason for the partial settlement..."
+                                className="w-full min-h-24 px-5 py-3.5 bg-white border-2 border-amber-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-4 focus:ring-amber-100 transition-all resize-y"
+                              />
+                            </InputGroup>
+                          )}
                         </div>
                       );
                     }

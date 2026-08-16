@@ -66,6 +66,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { format } from 'date-fns';
 import { auditService } from '../services/auditService';
+import { claimsApi } from '../services/api';
 import DownloadReportModal from './DownloadReportModal';
 import { toast } from 'sonner';
 import PendingTAT from './PendingTAT';
@@ -111,7 +112,7 @@ const CRMDashboard: React.FC<CRMDashboardProps> = ({
   const [filterStage, setFilterStage] = useState('all');
   const [filterFailureType, setFilterFailureType] = useState('all');
   const [filterTATRange, setFilterTATRange] = useState('all');
-  const [activeTab, setActiveTab] = useState<'all' | 'action-pending' | 'pre-auth-initiated' | 'pre-auth-approved' | 'enhancement-pending' | 'discharge-initiated' | 'discharge-reconsideration' | 'emails'>('action-pending');
+  const [activeTab, setActiveTab] = useState<'all' | 'action-pending' | 'under-review' | 'processed' | 'pre-auth-initiated' | 'pre-auth-approved' | 'enhancement-pending' | 'discharge-initiated' | 'discharge-reconsideration' | 'emails'>('action-pending');
   const [searchQuery, setSearchQuery] = useState('');
   const isManager = useMemo(() => {
     const managerRoles = ['CRM Manager', 'Sales Manager', 'Reconciliation Manager', 'Medical Manager', 'Department Head', 'Super Admin', 'Admin'];
@@ -127,6 +128,7 @@ const CRMDashboard: React.FC<CRMDashboardProps> = ({
   const [selectedUser, setSelectedUser] = useState<string>('all');
   const [showQuickAction, setShowQuickAction] = useState<Claim | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<string | null>(null);
+  const [crmPerformance, setCrmPerformance] = useState<{ today: number; weekly: number; monthly: number; totalProcessed: number; approved: number; queries: number; rejected: number } | null>(null);
   const [showHospitalSelect, setShowHospitalSelect] = useState(false);
 
   const assignedHospitals = useMemo(() => {
@@ -158,6 +160,7 @@ const CRMDashboard: React.FC<CRMDashboardProps> = ({
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isAutoRefreshPaused, setIsAutoRefreshPaused] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [showMyPerformance, setShowMyPerformance] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualRequest, setManualRequest] = useState({ 
     hospitalId: '', 
@@ -275,6 +278,29 @@ const CRMDashboard: React.FC<CRMDashboardProps> = ({
     if (source === 'hospital' || source === 'hospital user') return true;
     return !source && Boolean(claim.hospitalId || claim.formData?.hospitalId);
   };
+
+  const needsCrmAction = (claim: Claim) =>
+    claim.crmReviewStatus !== 'Processed' && (
+      isHospitalInitiatedClaim(claim) ||
+      claim.submissionStatus === 'Failed' ||
+      claim.status === ClaimStatus.MEDICAL_REJECTED ||
+      claim.status === ClaimStatus.DISCHARGE_INITIATED ||
+      claim.status === ClaimStatus.MEDICAL_QUERY_RAISED ||
+      claim.status === ClaimStatus.MEDICAL_QUERY_REPLIED ||
+      (claim.product as any) === Product.ICA ||
+      (claim.product as any) === Product.PRE_POST ||
+      (claim.product as any) === 'ICA' ||
+      (claim.product as any) === 'Pre & Post'
+    );
+
+  const isUnderCrmReview = (claim: Claim) =>
+    needsCrmAction(claim) && Boolean(claim.assignedCrmUserId) && claim.crmReviewStatus !== 'Processed';
+
+  const isCrmProcessed = (claim: Claim) => claim.crmReviewStatus === 'Processed';
+
+  useEffect(() => {
+    claimsApi.getCrmPerformance().then((response) => setCrmPerformance(response as any)).catch(() => setCrmPerformance(null));
+  }, [claims]);
 
   const loadEmailsFromStorage = () => {
     try {
@@ -866,18 +892,11 @@ CRM Team
     
     // 6. Action Pending Bucket Logic
     if (activeTab === 'action-pending') {
-      filtered = filtered.filter(c => 
-        isHospitalInitiatedClaim(c) ||
-        c.submissionStatus === 'Failed' || 
-        c.status === ClaimStatus.MEDICAL_REJECTED || 
-        c.status === ClaimStatus.DISCHARGE_INITIATED ||
-        c.status === ClaimStatus.MEDICAL_QUERY_RAISED ||
-        c.status === ClaimStatus.MEDICAL_QUERY_REPLIED ||
-        (c.product as any) === Product.ICA || 
-        (c.product as any) === Product.PRE_POST || 
-        (c.product as any) === 'ICA' || 
-        (c.product as any) === 'Pre & Post'
-      );
+      filtered = filtered.filter(c => needsCrmAction(c) && !c.assignedCrmUserId);
+    } else if (activeTab === 'under-review') {
+      filtered = filtered.filter(isUnderCrmReview);
+    } else if (activeTab === 'processed') {
+      filtered = filtered.filter(c => isCrmProcessed(c) && (viewMode === 'manager' || c.crmDecision?.completedByUserId === currentUser.id));
     } else if (activeTab === 'pre-auth-initiated') {
       filtered = filtered.filter(c => c.status === ClaimStatus.PRE_AUTH_INITIATED);
     } else if (activeTab === 'pre-auth-approved') {
@@ -891,7 +910,7 @@ CRM Team
     }
 
     return filtered;
-  }, [baseFilteredClaims, activeTab]);
+  }, [baseFilteredClaims, activeTab, currentUser.id, viewMode]);
 
   const handleReplyQuery = async () => {
     if (!queryReply || !showPatientDashboard) return;
@@ -962,18 +981,9 @@ CRM Team
   };
 
   const stats = useMemo(() => {
-    const failed = baseFilteredClaims.filter(c => 
-      isHospitalInitiatedClaim(c) ||
-      c.submissionStatus === 'Failed' || 
-      c.status === ClaimStatus.MEDICAL_REJECTED || 
-      c.status === ClaimStatus.DISCHARGE_INITIATED ||
-      c.status === ClaimStatus.MEDICAL_QUERY_RAISED ||
-      c.status === ClaimStatus.MEDICAL_QUERY_REPLIED ||
-      (c.product as any) === Product.ICA || 
-      (c.product as any) === Product.PRE_POST || 
-      (c.product as any) === 'ICA' || 
-      (c.product as any) === 'Pre & Post'
-    ).length;
+    const failed = baseFilteredClaims.filter(c => needsCrmAction(c) && !c.assignedCrmUserId).length;
+    const underReview = baseFilteredClaims.filter(isUnderCrmReview).length;
+    const processed = baseFilteredClaims.filter(isCrmProcessed).length;
     const preAuthInitiated = baseFilteredClaims.filter(c => c.status === ClaimStatus.PRE_AUTH_INITIATED).length;
     const preAuthApproved = baseFilteredClaims.filter(c => c.status === ClaimStatus.PRE_AUTH_APPROVED).length;
     const enhancementPending = baseFilteredClaims.filter(c => c.status === ClaimStatus.ENHANCEMENT).length;
@@ -983,6 +993,8 @@ CRM Team
 
     return { 
       failed, 
+      underReview,
+      processed,
       preAuthInitiated, 
       preAuthApproved, 
       enhancementPending, 
@@ -993,18 +1005,7 @@ CRM Team
   }, [baseFilteredClaims]);
 
   useEffect(() => {
-    const failed = claims.filter(c => 
-      isHospitalInitiatedClaim(c) ||
-      c.submissionStatus === 'Failed' || 
-      c.status === ClaimStatus.MEDICAL_REJECTED || 
-      c.status === ClaimStatus.DISCHARGE_INITIATED ||
-      c.status === ClaimStatus.MEDICAL_QUERY_RAISED ||
-      c.status === ClaimStatus.MEDICAL_QUERY_REPLIED ||
-      (c.product as any) === Product.ICA || 
-      (c.product as any) === Product.PRE_POST || 
-      (c.product as any) === 'ICA' || 
-      (c.product as any) === 'Pre & Post'
-    ).length;
+    const failed = claims.filter(c => needsCrmAction(c) && !c.assignedCrmUserId).length;
     if (failed > stats.failed) {
       setNewFailedCount(prev => prev + (failed - stats.failed));
     }
@@ -1250,6 +1251,14 @@ CRM Team
             Download Report
           </button>
 
+          <button
+            onClick={() => setShowMyPerformance(true)}
+            className="px-6 py-3 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-blue-900/20 hover:bg-blue-700 transition-all active:scale-95 flex items-center"
+          >
+            <BarChart3 size={16} className="mr-2" />
+            My Performance
+          </button>
+
           <button 
             onClick={() => setShowManualModal(true)}
             className="px-6 py-3 bg-orange-500 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-orange-900/20 hover:bg-orange-600 transition-all active:scale-95 flex items-center"
@@ -1335,7 +1344,21 @@ CRM Team
             isCritical={stats.failed > 0} 
             onClick={() => setActiveTab('action-pending')}
           />
-          <PerformanceCard 
+          <PerformanceCard
+            label="Under Review"
+            value={stats.underReview}
+            icon={Clock}
+            color="blue"
+            onClick={() => setActiveTab('under-review')}
+          />
+          <PerformanceCard
+            label="Processed"
+            value={stats.processed}
+            icon={CheckCircle2}
+            color="emerald"
+            onClick={() => setActiveTab('processed')}
+          />
+          <PerformanceCard
             label="Pre-Auth Initiated" 
             value={stats.preAuthInitiated} 
             icon={Zap} 
@@ -1371,6 +1394,7 @@ CRM Team
             onClick={() => setActiveTab('discharge-reconsideration')}
           />
         </div>
+
       </div>
 
       {/* Main Content Grid */}
@@ -1378,7 +1402,7 @@ CRM Team
         {/* Case Listing & Workflow */}
         <div className="space-y-6">
           <div className="flex bg-slate-100 p-1.5 rounded-2xl shadow-inner overflow-x-auto no-scrollbar w-full sm:w-auto">
-            <button 
+            <button
               onClick={() => setActiveTab('action-pending')}
               className={`px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 relative whitespace-nowrap ${activeTab === 'action-pending' ? 'bg-rose-600 text-white shadow-lg shadow-rose-200' : 'text-slate-400 hover:text-slate-600'}`}
             >
@@ -1392,6 +1416,23 @@ CRM Team
                   <span className="absolute -top-1 -right-1 w-3 h-3 bg-rose-500 rounded-full animate-ping"></span>
                 </>
               )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab('under-review')}
+              className={`px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'under-review' ? 'bg-blue-600 text-white shadow-lg shadow-blue-200' : 'text-slate-400 hover:text-slate-600'}`}
+            >
+              <Clock size={16} />
+              Under Review
+              {stats.underReview > 0 && <span className={`ml-1 px-2 py-0.5 rounded-full text-[10px] font-black ${activeTab === 'under-review' ? 'bg-white text-blue-600' : 'bg-blue-100 text-blue-600'}`}>{stats.underReview}</span>}
+            </button>
+
+            <button
+              onClick={() => setActiveTab('processed')}
+              className={`px-6 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === 'processed' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200' : 'text-slate-400 hover:text-slate-600'}`}
+            >
+              <CheckCircle2 size={16} /> Processed
+              {stats.processed > 0 && <span className={`ml-1 px-2 py-0.5 rounded-full text-[10px] font-black ${activeTab === 'processed' ? 'bg-white text-emerald-600' : 'bg-emerald-100 text-emerald-600'}`}>{stats.processed}</span>}
             </button>
 
             <button 
@@ -1735,7 +1776,7 @@ CRM Team
                   <option value="settlement">Settlement</option>
                 </select>
 
-                {activeTab === 'action-pending' && (
+                {['action-pending', 'under-review'].includes(activeTab) && (
                   <>
                     <select 
                       className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-[10px] font-black text-slate-600 outline-none focus:ring-4 focus:ring-rose-50 uppercase tracking-widest"
@@ -1789,7 +1830,7 @@ CRM Team
                     <th className="px-3 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Case & Workflow</th>
                     <th className="px-3 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Product</th>
                     <th className="px-3 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Hospital & TPA</th>
-                    {activeTab === 'action-pending' ? (
+                    {['action-pending', 'under-review'].includes(activeTab) ? (
                       <>
                         <th className="px-3 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Failure Type</th>
                         <th className="px-3 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">TAT</th>
@@ -1864,7 +1905,7 @@ CRM Team
                           <p className="text-[10px] font-black text-slate-700 uppercase tracking-tight truncate max-w-[120px]">{getHospitalName(claim)}</p>
                           <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">{claim.formData?.tpa_provider || claim.insuranceProvider}</p>
                         </td>
-                        {activeTab === 'action-pending' ? (
+                        {['action-pending', 'under-review'].includes(activeTab) ? (
                           <>
                             <td className="px-6 py-4">
                               <div className="flex items-center gap-2">
@@ -1891,7 +1932,7 @@ CRM Team
                                   <User size={12} className="text-slate-400" />
                                 </div>
                                 <p className="text-[10px] font-black text-slate-600 uppercase tracking-tight">
-                                  {users.find(u => u.id === claim.assignedCrmUserId)?.displayName || 'Unassigned'}
+                                  {claim.assignedCrmUserName || users.find(u => u.id === claim.assignedCrmUserId)?.displayName || 'Unassigned'}
                                 </p>
                               </div>
                             </td>
@@ -1945,80 +1986,33 @@ CRM Team
                         <td className="px-6 py-4 text-right">
                           <div className="flex flex-col items-end gap-2">
                             <div className="flex items-center gap-2">
-                              {(claim.status === ClaimStatus.PRE_AUTH_INITIATED || (claim.status === ClaimStatus.INITIAL_QUERY_PENDING && claim.submissionStatus === 'Failed')) && (
-                                <button 
+                              {activeTab === 'action-pending' ? (
+                                <button
                                   onClick={async () => {
                                     setIsSubmitting(claim.id);
                                     try {
-                                      const updatedClaim: Claim = {
-                                        ...claim,
-                                        status: ClaimStatus.PRE_AUTH_INITIATED,
-                                        submissionStatus: 'Success',
-                                        manualSubmissionAt: new Date().toISOString(),
-                                        updatedAt: new Date().toISOString(),
-                                        history: [
-                                          {
-                                            id: Date.now().toString(),
-                                            date: new Date().toISOString(),
-                                            status: ClaimStatus.PRE_AUTH_INITIATED as any,
-                                            comment: 'Case manually submitted to Insurer/TPA via CRM.',
-                                            type: 'status_change'
-                                          },
-                                          ...(claim.history || [])
-                                        ]
-                                      };
-                                      onUpdateClaim(updatedClaim);
-                                      toast.success("Case submitted to Insurer/TPA successfully");
-                                    } catch (e) {
-                                      toast.error("Failed to submit case");
+                                      const response = await claimsApi.acceptForCrmReview(claim.id);
+                                      onUpdateClaim(response.data);
+                                      toast.success('Claim accepted and assigned to you');
+                                    } catch (error: any) {
+                                      toast.error(error?.message || 'Unable to accept claim');
                                     } finally {
                                       setIsSubmitting(null);
                                     }
                                   }}
                                   disabled={isSubmitting === claim.id}
-                                  className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-md active:scale-95 flex items-center gap-2"
+                                  className="px-6 py-2 bg-blue-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-md active:scale-95"
                                 >
-                                  {isSubmitting === claim.id ? <RefreshCw size={12} className="animate-spin" /> : <Send size={12} />}
-                                  Send to Insurer
+                                  {isSubmitting === claim.id ? <RefreshCw size={12} className="animate-spin" /> : 'Accept Claim'}
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => navigate(`/crm-handle/${claim.id}`)}
+                                  className="px-6 py-2 bg-emerald-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-md active:scale-95 flex items-center gap-2"
+                                >
+                                  <Send size={12} /> Submit Claim
                                 </button>
                               )}
-                              
-                              <button 
-                                onClick={async () => {
-                                  if (claim.assignedCrmUserId && claim.assignedCrmUserId !== currentUser.id) {
-                                    const assignedUser = users.find(u => u.id === claim.assignedCrmUserId);
-                                    if (assignedUser) {
-                                      setAssignmentConflict({ claim, assignedUser });
-                                      return;
-                                    }
-                                  }
-                                  
-                                  // If unassigned, assign to self
-                                  if (!claim.assignedCrmUserId) {
-                                    const updatedClaim: Claim = {
-                                      ...claim,
-                                      assignedCrmUserId: currentUser.id,
-                                      updatedAt: new Date().toISOString(),
-                                      history: [
-                                        {
-                                          id: Date.now().toString(),
-                                          date: new Date().toISOString(),
-                                          status: claim.status as any,
-                                          comment: `Case picked up by ${currentUser.displayName}`,
-                                          type: 'status_change'
-                                        },
-                                        ...(claim.history || [])
-                                      ]
-                                    };
-                                    onUpdateClaim(updatedClaim);
-                                  }
-                                  
-                                  navigate(`/crm-handle/${claim.id}`);
-                                }}
-                                className={`px-6 py-2 bg-emerald-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-md active:scale-95 ${claim.assignedCrmUserId ? 'animate-blink' : ''}`}
-                              >
-                                Handle
-                              </button>
                             </div>
                           </div>
                         </td>
@@ -2756,6 +2750,19 @@ CRM Team
       </AnimatePresence>
 
       {/* Download Report Modal */}
+      <AnimatePresence>
+        {showMyPerformance && (
+          <div className="fixed inset-0 z-[150] bg-slate-950/50 backdrop-blur-sm flex justify-end" onClick={() => setShowMyPerformance(false)}>
+            <motion.div initial={{ x: 420 }} animate={{ x: 0 }} exit={{ x: 420 }} onClick={(event) => event.stopPropagation()} className="h-full w-full max-w-md bg-white shadow-2xl flex flex-col">
+              <div className="p-6 border-b border-slate-200 flex justify-between items-center"><div className="flex gap-3 items-center"><div className="w-10 h-10 bg-blue-600 rounded-xl text-white flex items-center justify-center"><Trophy size={19} /></div><div><h3 className="font-black text-slate-800">My Performance</h3><p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">CRM officer insights</p></div></div><button onClick={() => setShowMyPerformance(false)} className="p-2 text-slate-400 hover:text-slate-700"><X size={20} /></button></div>
+              <div className="p-6 space-y-7 overflow-y-auto">
+                <div><p className="text-xs font-black text-slate-700 uppercase tracking-widest mb-3">Review Statistics</p><div className="grid grid-cols-2 gap-3">{[['Today', crmPerformance?.today], ['This Week', crmPerformance?.weekly], ['This Month', crmPerformance?.monthly], ['Total Lifetime', crmPerformance?.totalProcessed]].map(([label, value]) => <div key={String(label)} className="p-4 bg-slate-50 border border-slate-200 rounded-xl"><p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{label}</p><p className="text-2xl font-black text-slate-800 mt-1">{value ?? '—'}</p></div>)}</div></div>
+                <div><p className="text-xs font-black text-slate-700 uppercase tracking-widest mb-3">Decision Outcomes</p>{[['Approved', crmPerformance?.approved, 'bg-emerald-500'], ['Queries Raised', crmPerformance?.queries, 'bg-amber-500'], ['Rejected', crmPerformance?.rejected, 'bg-rose-500']].map(([label, value, color]) => <div key={String(label)} className="mb-4"><div className="flex justify-between text-xs font-bold text-slate-600"><span>{label}</span><span>{value ?? '—'}</span></div><div className="h-1.5 rounded bg-slate-100 mt-2"><div className={`h-full rounded ${color}`} style={{ width: `${crmPerformance?.totalProcessed ? (Number(value) / crmPerformance.totalProcessed) * 100 : 0}%` }} /></div></div>)}</div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
       <DownloadReportModal 
         isOpen={showDownloadModal} 
         onClose={() => setShowDownloadModal(false)} 

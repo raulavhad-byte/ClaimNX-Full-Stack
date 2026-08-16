@@ -14,6 +14,7 @@ import {
 import { formatDate, isValidYearFormat, checkDateReasonability } from '../utils';
 import { toast } from 'sonner';
 import { documentsApi, usersApi, ordersApi } from '../services/api';
+import { claimnxApi } from '../services/claimnx-api';
 
 interface ManageHospitalProps {
   user: HospitalUser;
@@ -156,6 +157,37 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
     host: 'smtp.gmail.com',
     port: 587
   });
+  // Only platform administrators may choose a different onboarded hospital.
+  // Hospital users must never see or operate the cross-hospital selector.
+  const canManageAnyHospitalEmail = ['SUPER ADMIN', 'ADMIN'].includes(user.role?.toUpperCase() || '');
+  const onboardingHospitals = useMemo(
+    () => (users || []).filter((entry: any) => (entry.entityType || '').toUpperCase() === 'HOSPITAL'),
+    [users],
+  );
+  const [emailHospitalId, setEmailHospitalId] = useState(user.hospitalId || '');
+  const [emailHospitalSearch, setEmailHospitalSearch] = useState('');
+  const [isStartingGmailOAuth, setIsStartingGmailOAuth] = useState(false);
+  const [connectedMailboxes, setConnectedMailboxes] = useState<any[]>([]);
+  const filteredOnboardingHospitals = useMemo(() => {
+    const search = emailHospitalSearch.trim().toLowerCase();
+    if (!search) return onboardingHospitals;
+    return onboardingHospitals.filter((hospital: any) => {
+      const name = String(hospital.hospitalName || hospital.displayName || hospital.name || '').toLowerCase();
+      const code = String(hospital.hospitalCode || hospital.rohiniId || '').toLowerCase();
+      return name.includes(search) || code.includes(search);
+    });
+  }, [emailHospitalSearch, onboardingHospitals]);
+  const emailTargetHospitalId = emailHospitalId || user.hospitalId || '';
+
+  useEffect(() => {
+    if (!emailTargetHospitalId) {
+      setConnectedMailboxes([]);
+      return;
+    }
+    claimnxApi.get<any[]>(`/email/mailboxes?hospitalIds=${encodeURIComponent(emailTargetHospitalId)}`)
+      .then((accounts) => setConnectedMailboxes(accounts.filter((account) => account.status === 'ACTIVE')))
+      .catch(() => setConnectedMailboxes([]));
+  }, [emailTargetHospitalId]);
 
   // Digital Assets
   const [processingImage, setProcessingImage] = useState<string | null>(null);
@@ -690,9 +722,12 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
 
   const openEmailConfig = (type: string) => {
      const existing = formData.smtpConfigs?.find(c => c.provider === type);
+     const connectedGmail = type === 'Gmail'
+       ? connectedMailboxes.find((mailbox) => mailbox.provider === 'GMAIL')
+       : undefined;
      setConfiguringEmailType(type);
      setEmailConfigForm({
-        email: existing?.username || '',
+        email: connectedGmail?.email_address || existing?.username || '',
         password: existing?.password || '',
         provider: type,
         host: existing?.host || EMAIL_PRESETS[type]?.host || 'smtp.gmail.com',
@@ -726,6 +761,75 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
 
     setFormData(prev => ({ ...prev, smtpConfigs: updatedConfigs }));
     setConfiguringEmailType(null);
+  };
+
+  const handleConnectGmail = async () => {
+    let hospitalId: string;
+    try {
+      hospitalId = await resolveEmailHospitalId();
+    } catch (error: any) {
+      toast.error(error?.message || 'Select the hospital that will own this mailbox.');
+      return;
+    }
+    const emailAddress = emailConfigForm.email.trim();
+    if (!hospitalId) {
+      toast.error('Select the hospital that will own this mailbox.');
+      return;
+    }
+    if (!emailAddress) {
+      toast.error('Enter the Gmail address to connect.');
+      return;
+    }
+    setIsStartingGmailOAuth(true);
+    try {
+      const result = await claimnxApi.post<{ authorizationUrl: string }>('/email/gmail/oauth/authorize', {
+        hospitalId,
+        emailAddress,
+        displayName: formData.hospitalName || formData.displayNameFull || 'ClaimNX Claims Desk',
+      });
+      window.location.assign(result.authorizationUrl);
+    } catch (error: any) {
+      toast.error(error?.message || 'Unable to start Gmail authorization.');
+      setIsStartingGmailOAuth(false);
+    }
+  };
+
+  const resolveEmailHospitalId = async (): Promise<string> => {
+    const selectedId = emailHospitalId || user.hospitalId || formData.hospitalId || '';
+    // Hospital Management historically stored some non-UUID identifiers in
+    // browser profile data. OAuth must always use the canonical hospitals.id.
+    const hospitals = await claimnxApi.get<any>('/hospitals');
+    const list = Array.isArray(hospitals) ? hospitals : (hospitals?.data || []);
+    const direct = list.find((hospital: any) => String(hospital?.id) === String(selectedId));
+    if (direct?.id) return String(direct.id);
+    const normalize = (value: unknown) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    const names = [formData.hospitalName, formData.displayNameFull, user.hospitalName, user.displayNameFull]
+      .map(normalize)
+      .filter(Boolean);
+    const matchingHospital = list.find((hospital: any) => names.includes(normalize(hospital?.hospitalName || hospital?.hospital_name || hospital?.displayName || hospital?.display_name || hospital?.name)));
+    if (!matchingHospital?.id) throw new Error('The selected hospital does not exist or is inactive. Please select an active onboarded hospital.');
+    setEmailHospitalId(String(matchingHospital.id));
+    return String(matchingHospital.id);
+  };
+
+  const handleConnectOAuthMailbox = async (provider: 'Microsoft Office' | 'Outlook' | 'Yahoo Mail') => {
+    let hospitalId: string;
+    try {
+      hospitalId = await resolveEmailHospitalId();
+    } catch (error: any) {
+      toast.error(error?.message || 'Select the hospital that will own this mailbox.');
+      return;
+    }
+    const emailAddress = emailConfigForm.email.trim();
+    if (!hospitalId) { toast.error('Select the hospital that will own this mailbox.'); return; }
+    if (!emailAddress) { toast.error('Enter the mailbox address to connect.'); return; }
+    try {
+      const endpoint = provider === 'Yahoo Mail' ? '/email/yahoo/oauth/authorize' : '/email/microsoft/oauth/authorize';
+      const result = await claimnxApi.post<{ authorizationUrl: string }>(endpoint, { hospitalId, emailAddress, displayName: formData.hospitalName || formData.displayNameFull || 'ClaimNX Claims Desk' });
+      window.location.assign(result.authorizationUrl);
+    } catch (error: any) {
+      toast.error(error?.message || `Unable to start ${provider} authorization.`);
+    }
   };
 
   const [isVerifyingNHCX, setIsVerifyingNHCX] = useState(false);
@@ -1141,7 +1245,7 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
                     <div className="bg-white p-10 rounded-[3rem] border border-slate-200 shadow-sm">
                        <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-8 shadow-sm"><Mail size={32} /></div>
                        <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tight leading-none mb-3">Email Automation</h3>
-                       <p className="text-xs font-bold text-slate-400 leading-relaxed uppercase tracking-widest">Configure SMTP servers for automated claim communication and notifications.</p>
+                       <p className="text-xs font-bold text-slate-400 leading-relaxed uppercase tracking-widest">Connect the hospital mailbox securely for claim communication and notifications.</p>
                        
                        <div className="mt-10 space-y-4">
                           <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100">
@@ -1161,9 +1265,27 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
                  </div>
 
                  <div className="lg:col-span-8 space-y-8">
+                    {canManageAnyHospitalEmail && (
+                      <div className="bg-indigo-50/60 rounded-[2rem] border border-indigo-100 p-6 flex flex-col md:flex-row md:items-end gap-4">
+                        <div className="flex-1">
+                          <p className="text-[10px] font-black text-indigo-700 uppercase tracking-widest mb-2">Onboarded hospital</p>
+                          <select value={emailHospitalId} onChange={(event) => setEmailHospitalId(event.target.value)} className="w-full p-3 bg-white border border-indigo-100 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200">
+                            <option value="">Select an onboarded hospital</option>
+                            {filteredOnboardingHospitals.map((hospital: any) => <option key={hospital.id} value={hospital.id}>{hospital.hospitalName || hospital.displayName || hospital.name}</option>)}
+                          </select>
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-[10px] font-black text-indigo-700 uppercase tracking-widest mb-2">Filter hospital</p>
+                          <div className="relative">
+                            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input value={emailHospitalSearch} onChange={(event) => setEmailHospitalSearch(event.target.value)} placeholder="Name, code, or Rohini ID" className="w-full pl-9 pr-3 py-3 bg-white border border-indigo-100 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-200" />
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     <div className="bg-white rounded-[3rem] border border-slate-200 shadow-sm overflow-hidden">
                        <div className="p-10 border-b border-slate-100 flex items-center justify-between bg-slate-50/30">
-                          <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Configured SMTP Servers</h3>
+                          <h3 className="text-xl font-black text-slate-800 uppercase tracking-tight">Hospital Mailboxes</h3>
                           <button onClick={() => setConfiguringEmailType('Custom')} className="px-6 py-3 bg-[#000080] text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-800 shadow-md active:scale-95 transition-all flex items-center">
                              <Plus size={16} className="mr-2" /> Add SMTP
                           </button>
@@ -1172,27 +1294,32 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
                        <div className="p-10 grid grid-cols-1 md:grid-cols-2 gap-6">
                           {Object.keys(EMAIL_PRESETS).map(provider => {
                              const config = formData.smtpConfigs?.find(c => c.provider === provider);
+                             const mailboxProvider = provider === 'Gmail' ? 'GMAIL' : provider === 'Yahoo Mail' ? 'YAHOO' : ['Microsoft Office', 'Outlook'].includes(provider) ? 'MICROSOFT_365' : undefined;
+                             const connectedMailbox = mailboxProvider
+                               ? connectedMailboxes.find((mailbox) => mailbox.provider === mailboxProvider)
+                               : undefined;
+                             const isConnected = Boolean(connectedMailbox || config);
                              return (
-                                <div key={provider} className={`p-6 rounded-[2rem] border-2 transition-all group ${config ? 'border-emerald-100 bg-emerald-50/30' : 'border-slate-100 bg-white hover:border-blue-100'}`}>
+                                <div key={provider} className={`p-6 rounded-[2rem] border-2 transition-all group ${isConnected ? 'border-emerald-100 bg-emerald-50/30' : 'border-slate-100 bg-white hover:border-blue-100'}`}>
                                    <div className="flex items-center justify-between mb-6">
                                       <div className="flex items-center gap-4">
-                                         <div className={`w-12 h-12 rounded-xl flex items-center justify-center shadow-sm ${config ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-50 text-slate-400 group-hover:bg-blue-50 group-hover:text-blue-600'}`}>
+                                         <div className={`w-12 h-12 rounded-xl flex items-center justify-center shadow-sm ${isConnected ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-50 text-slate-400 group-hover:bg-blue-50 group-hover:text-blue-600'}`}>
                                             <AtSign size={24} />
                                          </div>
                                          <div>
                                             <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">{provider}</h4>
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{config ? config.username : 'Not Configured'}</p>
+                                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{connectedMailbox?.email_address || (config ? config.username : 'Not Configured')}</p>
                                          </div>
                                       </div>
-                                      {config && <div className="w-3 h-3 bg-emerald-500 rounded-full shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>}
+                                      {isConnected && <div className="w-3 h-3 bg-emerald-500 rounded-full shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>}
                                    </div>
                                    <button 
                                       onClick={() => openEmailConfig(provider)}
                                       className={`w-full py-3 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${
-                                         config ? 'bg-white text-emerald-600 border border-emerald-200 hover:bg-emerald-600 hover:text-white' : 'bg-slate-50 text-slate-600 border border-slate-100 hover:bg-[#000080] hover:text-white'
+                                         isConnected ? 'bg-white text-emerald-600 border border-emerald-200 hover:bg-emerald-600 hover:text-white' : 'bg-slate-50 text-slate-600 border border-slate-100 hover:bg-[#000080] hover:text-white'
                                       }`}
                                    >
-                                      {config ? 'Edit Config' : 'Configure'}
+                                      {provider === 'Gmail' ? (connectedMailbox ? 'Connected — manage' : 'Connect securely') : config ? 'Edit Config' : 'Configure'}
                                    </button>
                                 </div>
                              );
@@ -1211,13 +1338,33 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
                              <div className="w-16 h-16 bg-[#000080] text-white rounded-2xl flex items-center justify-center shadow-xl"><AtSign size={32} /></div>
                              <div>
                                 <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tight leading-none mb-1">{configuringEmailType} Setup</h3>
-                                <p className="text-[10px] font-black text-[#000080] uppercase tracking-[0.2em]">SMTP Server Configuration</p>
+                                <p className="text-[10px] font-black text-[#000080] uppercase tracking-[0.2em]">{['Gmail', 'Microsoft Office', 'Outlook', 'Yahoo Mail'].includes(configuringEmailType) ? 'Secure OAuth Connection' : 'SMTP Server Configuration'}</p>
                              </div>
                           </div>
                           <button onClick={() => setConfiguringEmailType(null)} className="p-4 text-slate-400 hover:text-slate-600 transition-all hover:bg-white rounded-2xl"><X size={28} /></button>
                        </div>
                        
                        <div className="p-12 space-y-8">
+                          {configuringEmailType === 'Gmail' && (
+                            <>
+                              {canManageAnyHospitalEmail && !emailHospitalId && <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-xl p-4">Select an onboarded hospital above before continuing with Gmail.</p>}
+                              <FieldView label="Gmail address" value={emailConfigForm.email} isEditing={true} onChange={(value: string) => setEmailConfigForm(prev => ({ ...prev, email: value }))} />
+                              <div className="p-6 bg-blue-50 rounded-2xl border border-blue-100 flex gap-4">
+                                <ShieldCheck className="text-blue-600 shrink-0" size={20} />
+                                <p className="text-[10px] font-bold text-blue-900 leading-relaxed uppercase">ClaimNX opens Google&apos;s consent screen. Your password is never entered, displayed, or stored by ClaimNX.</p>
+                              </div>
+                              <button onClick={handleConnectGmail} disabled={isStartingGmailOAuth} className="w-full py-5 bg-[#000080] disabled:opacity-60 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl hover:bg-blue-800 transition-all">
+                                {isStartingGmailOAuth ? 'Opening Google…' : 'Continue with Google'}
+                              </button>
+                            </>
+                          )}
+                          {(['Microsoft Office', 'Outlook', 'Yahoo Mail'].includes(configuringEmailType)) && <>
+                            {canManageAnyHospitalEmail && !emailHospitalId && <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-xl p-4">Select an onboarded hospital above before continuing.</p>}
+                            <FieldView label="Mailbox address" value={emailConfigForm.email} isEditing={true} onChange={(value: string) => setEmailConfigForm(prev => ({ ...prev, email: value }))} />
+                            <div className="p-6 bg-blue-50 rounded-2xl border border-blue-100 flex gap-4"><ShieldCheck className="text-blue-600 shrink-0" size={20} /><p className="text-[10px] font-bold text-blue-900 leading-relaxed uppercase">ClaimNX opens the provider&apos;s consent screen. Your password is never entered, displayed, or stored by ClaimNX.</p></div>
+                            <button onClick={() => handleConnectOAuthMailbox(configuringEmailType as 'Microsoft Office' | 'Outlook' | 'Yahoo Mail')} className="w-full py-5 bg-[#000080] text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl hover:bg-blue-800 transition-all">Continue securely</button>
+                          </>}
+                          {!['Gmail', 'Microsoft Office', 'Outlook', 'Yahoo Mail'].includes(configuringEmailType) && <>
                           <div className="grid grid-cols-2 gap-8">
                              <div className="col-span-2">
                                 <FieldView 
@@ -1278,6 +1425,7 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
                                 Save Configuration
                              </button>
                           </div>
+                          </>}
                        </div>
                     </div>
                  </div>

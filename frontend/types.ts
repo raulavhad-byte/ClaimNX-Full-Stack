@@ -230,6 +230,17 @@ export interface Claim {
   failureReason?: string;
   failureType?: 'Email' | 'Portal' | 'RPA';
   assignedCrmUserId?: string;
+  assignedCrmUserName?: string;
+  /** Tracks a CRM claim from acceptance through completion of the CRM action. */
+  crmReviewStatus?: 'Under Review' | 'Processed';
+  crmDecision?: {
+    decision: 'Completed';
+    comment: string;
+    attachments?: Array<{ id?: string; name?: string; mimeType?: string }>;
+    completedAt: string;
+    completedByUserId: string;
+    completedByUserName: string;
+  };
   assignedReconUserId?: string;
   assignedMedicalUserId?: string;
   assignedMedicalUserName?: string;

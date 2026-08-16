@@ -256,11 +256,18 @@ export class DocumentsService {
     const history = Array.isArray(formData.history) ? [...formData.history] : [];
 
     if (history.length > 0) {
-      const lastIndex = history.length - 1;
-      const latest = history[lastIndex] && typeof history[lastIndex] === 'object' ? history[lastIndex] : {};
+      // Claim timeline entries are prepended by every workflow command. Use
+      // the greatest timestamp instead of assuming insertion order so uploads
+      // are always linked to the latest real business event.
+      const latestIndex = history.reduce((bestIndex: number, entry: any, index: number) => {
+        const bestTime = Date.parse(history[bestIndex]?.date ?? '') || 0;
+        const entryTime = Date.parse(entry?.date ?? '') || 0;
+        return entryTime > bestTime ? index : bestIndex;
+      }, 0);
+      const latest = history[latestIndex] && typeof history[latestIndex] === 'object' ? history[latestIndex] : {};
       const stageData = latest.stageData && typeof latest.stageData === 'object' ? latest.stageData : {};
       const eventDocuments = Array.isArray(stageData.documents) ? stageData.documents : [];
-      history[lastIndex] = {
+      history[latestIndex] = {
         ...latest,
         stageData: { ...stageData, documents: upsertDocumentReference(eventDocuments) },
       };

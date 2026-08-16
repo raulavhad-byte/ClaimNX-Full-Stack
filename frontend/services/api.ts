@@ -201,6 +201,10 @@ function claimUpdatePayload(claim: any): Record<string, unknown> {
   const formData = claim?.formData ?? claim?.form_data ?? {};
   const workflowState = {
     originatingStatus: claim?.originatingStatus,
+    assignedCrmUserId: claim?.assignedCrmUserId ?? formData?.assignedCrmUserId,
+    assignedCrmUserName: claim?.assignedCrmUserName ?? formData?.assignedCrmUserName,
+    crmReviewStatus: claim?.crmReviewStatus ?? formData?.crmReviewStatus,
+    crmDecision: claim?.crmDecision ?? formData?.crmDecision,
     assignedMedicalUserId: claim?.assignedMedicalUserId,
     assignedMedicalUserName: claim?.assignedMedicalUserName,
     isAccepted: claim?.isAccepted,
@@ -448,6 +452,10 @@ function toPortalClaim(claim: any): any {
     product,
     status: databaseClaimStatusMap[status] ?? claim?.status ?? 'Draft',
     originatingStatus: claim?.originatingStatus ?? formData?.originatingStatus,
+    assignedCrmUserId: claim?.assignedCrmUserId ?? formData?.assignedCrmUserId,
+    assignedCrmUserName: claim?.assignedCrmUserName ?? formData?.assignedCrmUserName,
+    crmReviewStatus: claim?.crmReviewStatus ?? formData?.crmReviewStatus,
+    crmDecision: claim?.crmDecision ?? formData?.crmDecision,
     assignedMedicalUserId: claim?.assignedMedicalUserId ?? formData?.assignedMedicalUserId,
     assignedMedicalUserName: claim?.assignedMedicalUserName ?? formData?.assignedMedicalUserName,
     isAccepted: Boolean(claim?.isAccepted ?? formData?.isAccepted),
@@ -492,6 +500,14 @@ export const claimsApi = {
       data: collectionFrom(await request(`/claims${query}`), []).map(toPortalClaim),
     };
   },
+  getOne: async (id: string) => ({
+    data: toPortalClaim(await request(`/claims/${encodeURIComponent(id)}`)),
+  }),
+  downloadMisReport: async (type: string, startDate: string, endDate: string) => ({
+    data: await request(
+      `/claims/reports/mis?type=${encodeURIComponent(type)}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`,
+    ),
+  }),
   create: async (claim: any) => {
     // Claims are system-of-record data. Do not write a browser copy before
     // the API succeeds; otherwise a failed request can look like a saved
@@ -506,6 +522,20 @@ export const claimsApi = {
       })),
     };
   },
+  acceptForCrmReview: async (id: string) => ({
+    data: toPortalClaim(await request(`/claims/${encodeURIComponent(id)}/crm/accept`, { method: 'POST' })),
+  }),
+  submitCrmDecision: async (id: string, comment: string, attachments: Array<{ id?: string; name?: string; mimeType?: string }> = []) => ({
+    data: toPortalClaim(await request(`/claims/${encodeURIComponent(id)}/crm/decision`, {
+      method: 'POST', body: JSON.stringify({ comment, attachments }),
+    })),
+  }),
+  addCrmComment: async (id: string, comment: string, attachments: Array<{ id?: string; name?: string; mimeType?: string }> = []) => ({
+    data: toPortalClaim(await request(`/claims/${encodeURIComponent(id)}/crm/comment`, {
+      method: 'POST', body: JSON.stringify({ comment, attachments }),
+    })),
+  }),
+  getCrmPerformance: async () => request('/claims/crm/performance'),
   delete: async (id: string) => {
     return request(`/claims/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },

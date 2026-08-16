@@ -22,10 +22,20 @@ const iconMap: Record<string, React.ReactNode> = {
 };
 
 export const IntegrationPortal: React.FC = () => {
-  const [selectedId, setSelectedId] = useState(INTEGRATIONS[0].id);
+  const [selectedId, setSelectedId] = useState(() => INTEGRATIONS[0]?.id ?? '');
   const [activeTab, setActiveTab] = useState<'docs' | 'auth'>('docs');
 
-  const selectedSystem = INTEGRATIONS.find(s => s.id === selectedId)!;
+  const selectedSystem = INTEGRATIONS.find(s => s?.id === selectedId);
+
+  if (!selectedSystem) {
+    return (
+      <div className="min-h-screen bg-[#050505] text-zinc-300 p-4 md:p-8 font-sans flex flex-col items-center justify-center text-center">
+        <div className="p-4 bg-zinc-900 rounded-2xl border border-zinc-800 text-zinc-400 mb-5"><Code2 size={28} /></div>
+        <h1 className="text-xl font-bold text-zinc-100">No integrations configured</h1>
+        <p className="mt-2 max-w-md text-sm text-zinc-500">Integration definitions will appear here once they are configured for this tenant.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#050505] text-zinc-300 p-4 md:p-8 font-sans">

@@ -2335,6 +2335,20 @@ const AppContent: React.FC = () => {
       const isUuid = (value: unknown): value is string =>
         typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
+      // Resuming a saved draft must continue the exact same database claim.
+      // Creating a second record here left the original UUID claim in Draft
+      // while the new case moved through the workflow.
+      const existingPersistedClaim = isUuid(claim.id) && claims.some((existing) => existing.id === claim.id);
+      if (existingPersistedClaim) {
+        const res = await claimsApi.update(claim.id, claim);
+        setClaims((previous) => previous.map((existing) => existing.id === claim.id ? res.data : existing));
+        toast.success('Claim resumed and updated successfully');
+        if (!options?.preventNavigation) {
+          navigate('/cashless-dashboard', { state: { claimId: res.data.id, status: res.data.status } });
+        }
+        return res.data;
+      }
+
       // If we are finalizing a draft or using a temporary ID, delete the old draft claim
       const isDraftFinalization = claim.id?.startsWith('CL-DRAFT-') || claim.id?.startsWith('CL-') || claim.id?.startsWith('CLM-');
       if (isDraftFinalization && claim.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(claim.id)) {
@@ -2997,7 +3011,7 @@ const AppContent: React.FC = () => {
                  )
               } />
               <Route path="/upload" element={<Navigate to="/" replace />} />
-              <Route path="/cashless-dashboard" element={canAccess('nav_cashless') ? <CashlessDashboard claims={cashlessClaims} stages={stages} fields={fields} userPermissions={currentUserPermissions} kypPolicies={kypPolicies} hospitalId={currentScopeId} hospitalProfile={hospitalProfile} insurers={insurers} tpas={tpas} /> : <Navigate to="/" replace />} />
+              <Route path="/cashless-dashboard" element={canAccess('nav_cashless') ? <CashlessDashboard claims={cashlessClaims} stages={stages} fields={fields} userPermissions={currentUserPermissions} setClaims={setClaims} kypPolicies={kypPolicies} hospitalId={currentScopeId} hospitalProfile={hospitalProfile} insurers={insurers} tpas={tpas} /> : <Navigate to="/" replace />} />
               <Route path="/crm-dashboard" element={canAccess('nav_crm') ? <CRMDashboard claims={visibleClaims} hospitals={visibleHospitals} currentUser={hospitalProfile} users={hospitalUsers} onUpdateClaim={handleUpdateClaim} onUpdateInsurer={handleUpdateInsurer} fields={fields} insurers={insurers} tpas={tpas} permissions={currentUserPermissions} kypPolicies={kypPolicies} setKypPolicies={setKypPolicies} /> : <Navigate to="/" replace />} />
               <Route path="/crm-handle/:id" element={canAccess('nav_crm') ? <CRMManualHandling claims={visibleClaims} hospitals={hospitalUsers.filter((user) => (user.entityType || (user.isAdmin ? 'Hospital' : 'User')) === 'Hospital')} onUpdate={handleUpdateClaim} onUpdateInsurer={handleUpdateInsurer} onUpdateHospital={(updatedHospital) => {
                 if (hospitalProfile && hospitalProfile.id === updatedHospital.id) {

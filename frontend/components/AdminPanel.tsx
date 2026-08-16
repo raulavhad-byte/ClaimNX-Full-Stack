@@ -1339,10 +1339,10 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
 // EMBEDDED INTEGRATION PORTAL FOR ADMIN PANEL
 const IntegrationPortalEmbed: React.FC = () => {
-  const [selectedId, setSelectedId] = useState(INTEGRATIONS[0].id);
+  const [selectedId, setSelectedId] = useState(() => INTEGRATIONS[0]?.id ?? '');
   const [activePortalTab, setActivePortalTab] = useState<'docs' | 'auth'>('docs');
 
-  const selectedSystem = INTEGRATIONS.find(s => s.id === selectedId)!;
+  const selectedSystem = INTEGRATIONS.find(s => s?.id === selectedId);
   
   const iconMap: Record<string, React.ReactNode> = {
     Hospital: <Hospital size={20} />,
@@ -1350,6 +1350,16 @@ const IntegrationPortalEmbed: React.FC = () => {
     Landmark: <Landmark size={20} />,
     FileText: <FileText size={20} />
   };
+
+  if (!selectedSystem) {
+    return (
+      <div className="min-h-[360px] flex flex-col items-center justify-center p-10 text-center">
+        <div className="w-14 h-14 mb-5 rounded-2xl bg-slate-800 text-slate-400 flex items-center justify-center"><Code2 size={26} /></div>
+        <h4 className="text-sm font-black text-white uppercase tracking-wider">No integrations configured</h4>
+        <p className="mt-2 max-w-md text-xs font-medium text-slate-500">Integration definitions will appear here once they are configured for this tenant.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 min-h-[600px]">

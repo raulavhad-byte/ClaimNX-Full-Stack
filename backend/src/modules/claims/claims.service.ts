@@ -11,6 +11,8 @@ import { DatabaseService } from '../../database/database.service';
 import { CreateClaimDto } from './dto/create-claim.dto';
 import { UpdateClaimDto } from './dto/update-claim.dto';
 import { ClaimFilterDto } from './dto/claim-filter.dto';
+import { CrmDecisionDto } from './dto/crm-decision.dto';
+import { CrmCommentDto } from './dto/crm-comment.dto';
 import {
   canUpdateClaimAtStage,
   getStageUpdatePermission,
@@ -333,6 +335,11 @@ export class ClaimsService {
     }
 
     this.assertFinanceSettlementTransition(currentClaim.status, updateClaimDto.status);
+    this.assertRecoverablePartialSettlementReason(
+      currentClaim.status,
+      updateClaimDto.status,
+      updateClaimDto.form_data,
+    );
 
     const { data, error } = await this.supabase
       .from('claims')
@@ -350,6 +357,168 @@ export class ClaimsService {
     }
 
     return data;
+  }
+
+  /** CRM queue ownership is server-controlled so the browser cannot assign a
+   * case to another user or manufacture a review transition. */
+  async acceptForCrmReview(id: string, actor: ClaimStageActor) {
+    this.assertCrmActor(actor);
+    const claim = await this.findOne(id);
+    await this.assertClaimVisibleToUser(claim, actor.id, 'update');
+
+    const formData = { ...(claim.form_data ?? {}) };
+    const review = formData.crmReviewStatus;
+    const assignedUserId = formData.assignedCrmUserId;
+    if (review === 'Processed') {
+      throw new BadRequestException('A processed CRM claim cannot be accepted again.');
+    }
+    if (assignedUserId && assignedUserId !== actor.id) {
+      throw new ForbiddenException('This claim is already under review by another CRM user.');
+    }
+
+    const actorName = await this.getActorDisplayName(actor.id);
+    const now = new Date().toISOString();
+    const history = Array.isArray(formData.history) ? formData.history : [];
+    const nextFormData = {
+      ...formData,
+      assignedCrmUserId: actor.id,
+      assignedCrmUserName: actorName,
+      crmReviewStatus: 'Under Review',
+      history: [{
+        id: `crm-accepted-${randomUUID()}`,
+        date: now,
+        status: claim.status,
+        type: 'status_change',
+        comment: `CRM claim accepted by ${actorName}; moved to Under Review.`,
+      }, ...history],
+    };
+
+    return this.persistCrmWorkflow(id, nextFormData, actor.id);
+  }
+
+  /** Records the CRM decision and comment as a timeline event, then releases
+   * the claim into the processed queue. The decision is intentionally stored
+   * in form_data alongside the legacy claim timeline until CRM columns are
+   * promoted through a dedicated schema migration. */
+  async submitCrmDecision(id: string, decision: CrmDecisionDto, actor: ClaimStageActor) {
+    this.assertCrmActor(actor);
+    const claim = await this.findOne(id);
+    await this.assertClaimVisibleToUser(claim, actor.id, 'update');
+
+    const formData = { ...(claim.form_data ?? {}) };
+    if (formData.crmReviewStatus !== 'Under Review' || formData.assignedCrmUserId !== actor.id) {
+      throw new ForbiddenException('Only the CRM user assigned to an Under Review claim can submit its decision.');
+    }
+
+    const actorName = await this.getActorDisplayName(actor.id);
+    const now = new Date().toISOString();
+    const history = Array.isArray(formData.history) ? formData.history : [];
+    const nextFormData = {
+      ...formData,
+      assignedCrmUserId: null,
+      assignedCrmUserName: null,
+      crmReviewStatus: 'Processed',
+      crmDecision: {
+        decision: 'Completed',
+        comment: decision.comment.trim(),
+        attachments: decision.attachments ?? [],
+        completedAt: now,
+        completedByUserId: actor.id,
+        completedByUserName: actorName,
+      },
+      history: [{
+        id: `crm-decision-${randomUUID()}`,
+        date: now,
+        status: claim.status,
+        type: 'status_change',
+        comment: `CRM action completed by ${actorName}. Comment: ${decision.comment.trim()}`,
+        stageData: { documents: decision.attachments ?? [] },
+      }, ...history],
+    };
+
+    return this.persistCrmWorkflow(id, nextFormData, actor.id);
+  }
+
+  /** A CRM note is a non-transitioning operational activity. It is available
+   * at every claim stage and must never release, assign, or re-stage a claim. */
+  async addCrmComment(id: string, input: CrmCommentDto, actor: ClaimStageActor) {
+    this.assertCrmActor(actor);
+    const claim = await this.findOne(id);
+    await this.assertClaimVisibleToUser(claim, actor.id, 'update');
+
+    const actorName = await this.getActorDisplayName(actor.id);
+    const now = new Date().toISOString();
+    const formData = { ...(claim.form_data ?? {}) };
+    const history = Array.isArray(formData.history) ? formData.history : [];
+    const attachments = input.attachments ?? [];
+    return this.persistCrmWorkflow(id, {
+      ...formData,
+      history: [{
+        id: `crm-comment-${randomUUID()}`,
+        date: now,
+        status: claim.status,
+        type: 'status_change',
+        comment: `CRM comment by ${actorName}: ${input.comment.trim()}`,
+        stageData: { documents: attachments },
+      }, ...history],
+    }, actor.id);
+  }
+
+  async getCrmPerformance(actor: ClaimStageActor) {
+    this.assertCrmActor(actor);
+    const { data, error } = await this.supabase.rpc('claims_visible_to_user', {
+      p_actor_user_id: actor.id, p_status: null, p_priority: null,
+      p_patient_id: null, p_hospital_id: null, p_payer_id: null,
+    });
+    if (error) throw error;
+
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(startOfToday);
+    startOfWeek.setDate(startOfWeek.getDate() - ((startOfWeek.getDay() + 6) % 7));
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const decisions = (data ?? []).map((claim: any) => claim.form_data?.crmDecision)
+      .filter((entry: any) => entry?.completedByUserId === actor.id && entry.completedAt);
+    const countSince = (start: Date) => decisions.filter((entry: any) =>
+      new Date(entry.completedAt).getTime() >= start.getTime()).length;
+
+    return {
+      today: countSince(startOfToday),
+      weekly: countSince(startOfWeek),
+      monthly: countSince(startOfMonth),
+      totalProcessed: decisions.length,
+      approved: 0,
+      queries: 0,
+      rejected: 0,
+    };
+  }
+
+  private async persistCrmWorkflow(id: string, formData: Record<string, unknown>, actorUserId: string) {
+    const { data, error } = await this.supabase.from('claims').update({
+      form_data: formData,
+      updated_at: new Date().toISOString(),
+      updated_by: actorUserId,
+      last_updated_by: actorUserId,
+    }).eq('id', id).eq('is_deleted', false).select().single();
+    if (error || !data) throw new NotFoundException('Claim not found');
+    return data;
+  }
+
+  private async getActorDisplayName(actorUserId: string): Promise<string> {
+    const { data, error } = await this.supabase.from('users')
+      .select('display_name').eq('id', actorUserId).maybeSingle<{ display_name: string | null }>();
+    if (error) throw error;
+    return data?.display_name?.trim() || 'CRM User';
+  }
+
+  private assertCrmActor(actor: ClaimStageActor) {
+    const role = String(actor.role ?? '').trim().toUpperCase();
+    const permissions = Array.isArray(actor.permissions) ? actor.permissions : [];
+    const hasCrmPermission = permissions.some((permission) => typeof permission === 'string' && (
+      permission === 'all' || permission.startsWith('crm:') || permission === 'nav_crm'
+    ));
+    if (['SUPER ADMIN', 'ADMIN', 'PRIMARY ADMIN'].includes(role) || role.includes('CRM') || hasCrmPermission) return;
+    throw new ForbiddenException('CRM workflow actions require CRM access.');
   }
 
   private async assertClaimVisibleToUser(
@@ -370,6 +539,42 @@ export class ClaimsService {
     if (visibilityError) throw visibilityError;
     if (!(visibleClaims ?? []).some((visibleClaim: any) => visibleClaim.id === claim.id)) {
       throw new ForbiddenException(`You do not have access to ${action} this claim.`);
+    }
+  }
+
+  /**
+   * Recoverable partial settlements are reportable financial outcomes. Keep the
+   * taxonomy and the mandatory free-text explanation server-side so direct API
+   * callers cannot create incomplete records.
+   */
+  private assertRecoverablePartialSettlementReason(
+    currentStatus?: string,
+    nextStatus?: string,
+    formData?: Record<string, any>,
+  ) {
+    const recoverableStatus = 'Partially Claim Settled - Recoverable';
+    if (currentStatus === recoverableStatus || nextStatus !== recoverableStatus) return;
+
+    const allowedReasons = new Set([
+      'Tariff Deductions',
+      'Discount on Package',
+      'Non Medical Expenses',
+      'Reasonable & Customary Clause',
+      'Co-payment',
+      'Investigation Charges',
+      'SI Exhausted',
+      'Other',
+    ]);
+    const reason = String(formData?.partial_remark_type ?? '').trim();
+    if (!allowedReasons.has(reason)) {
+      throw new BadRequestException(
+        'A valid Partially Settled Reason is required for a recoverable partial settlement.',
+      );
+    }
+    if (reason === 'Other' && !String(formData?.partial_remark_other_comment ?? '').trim()) {
+      throw new BadRequestException(
+        'Specify the partial settlement reason when Other is selected.',
+      );
     }
   }
 
@@ -434,21 +639,52 @@ export class ClaimsService {
     }
   }
 
-  async remove(id: string) {
+  async remove(id: string, actor: ClaimStageActor) {
+    const claim = await this.findOne(id);
+    await this.assertClaimVisibleToUser(claim, actor.id, 'update');
+    if (String(claim.status ?? '').trim().toLowerCase() !== 'draft') {
+      throw new BadRequestException('Only saved draft claims can be deleted.');
+    }
+
+    // Drafts have not entered an operational workflow, so the user has
+    // explicitly chosen a true purge rather than retention/audit deletion.
+    // Remove private binaries and their document records before deleting the
+    // claim row, preventing orphaned storage objects and database rows.
+    const { data: documents, error: documentLookupError } = await this.supabase
+      .from('documents')
+      .select('id, file_path')
+      .eq('claim_id', id);
+    if (documentLookupError) throw documentLookupError;
+
+    const objectPaths = (documents ?? [])
+      .map((document: any) => String(document.file_path ?? ''))
+      .filter((path: string) => path.startsWith('claim-documents/'))
+      .map((path: string) => path.slice('claim-documents/'.length));
+    if (objectPaths.length > 0) {
+      const { error: storageError } = await this.supabase.storage
+        .from('claim-documents')
+        .remove(objectPaths);
+      if (storageError) throw storageError;
+    }
+
+    const { error: documentDeleteError } = await this.supabase
+      .from('documents')
+      .delete()
+      .eq('claim_id', id);
+    if (documentDeleteError) throw documentDeleteError;
+
     const { error } = await this.supabase
       .from('claims')
-      .update({
-        is_deleted: true,
-        deleted_at: new Date().toISOString(),
-      })
-      .eq('id', id);
+      .delete()
+      .eq('id', id)
+      .eq('is_deleted', false);
 
     if (error) {
       throw error;
     }
 
     return {
-      message: 'Claim deleted successfully',
+      message: 'Draft claim permanently deleted successfully',
     };
   }
 }
