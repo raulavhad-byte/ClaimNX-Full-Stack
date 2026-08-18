@@ -13,9 +13,9 @@ const TataAigTemplate: React.FC<TataAigTemplateProps> = ({ formData }) => {
     return (
       <div className={`flex flex-col ${className}`}>
         {label && <span className="text-[7px] font-bold text-slate-500 uppercase mb-0.5">{label}</span>}
-        <div className="flex flex-wrap border-l border-t border-black">
+        <div className="flex flex-nowrap border-l border-t border-black">
           {chars.map((char, i) => (
-            <div key={i} className="w-[11px] h-[12px] border-r border-b border-black flex items-center justify-center text-[7px] font-black text-black bg-white">
+            <div key={i} className="w-[11px] h-[12px] shrink-0 border-r border-b border-black flex items-center justify-center text-[7px] font-black text-[#00338d] bg-white">
               {char === ' ' ? '' : char}
             </div>
           ))}
@@ -48,7 +48,7 @@ const TataAigTemplate: React.FC<TataAigTemplateProps> = ({ formData }) => {
         {label && <span className="text-[7px] font-bold text-slate-500 uppercase mb-0.5">{label}</span>}
         <div className="flex">
           {sequence.map((char, i) => (
-            <div key={i} className="w-[11px] h-[12px] border-l border-t border-r border-b border-black flex items-center justify-center text-[7px] font-black text-black">
+            <div key={i} className="w-[11px] h-[12px] shrink-0 border-l border-t border-r border-b border-black flex items-center justify-center text-[7px] font-black text-[#00338d]">
               {char}
             </div>
           ))}
@@ -76,7 +76,7 @@ const TataAigTemplate: React.FC<TataAigTemplateProps> = ({ formData }) => {
   const UnderlineField: React.FC<{ label: string, value: string, className?: string }> = ({ label, value, className = "" }) => (
     <div className={`flex items-end border-b border-black pb-0.5 ${className}`}>
       <span className="text-[8px] font-bold text-black whitespace-nowrap mr-2">{label}</span>
-      <span className="text-[8px] font-black text-black uppercase flex-1">{value}</span>
+      <span className="text-[8px] font-black text-[#00338d] uppercase flex-1">{value}</span>
     </div>
   );
 

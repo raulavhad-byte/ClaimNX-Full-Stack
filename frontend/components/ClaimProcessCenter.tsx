@@ -705,6 +705,36 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
     );
   }, [claim, kypPolicies]);
 
+  // A policy may be available in the in-memory Policy Audit queue while the
+  // user is working, but the claim timeline is the durable source after a
+  // reload. Only a submitted/approved KYP analysis may be opened by another
+  // operational desk; a KYP assignment or work-in-progress must stay hidden.
+  const submittedKyp = useMemo(() => {
+    if (!claim) return null;
+    const submittedStatuses = new Set([
+      'KYP Pending Approval',
+      'Approved',
+      'KYP Completed',
+    ]);
+
+    if (currentKyp && submittedStatuses.has(currentKyp.status)) {
+      return currentKyp;
+    }
+
+    const persistedEvent = (claim.history ?? []).find((event) =>
+      Boolean(event.stageData?.isKypEvent) &&
+      ['KYP Submitted', 'KYP Approved', 'KYP Completed'].includes(String(event.status)),
+    );
+    const persistedKyp = persistedEvent?.stageData?.kypData;
+    if (!persistedKyp || typeof persistedKyp !== 'object') return null;
+
+    return {
+      ...(persistedKyp as KYPPolicy),
+      claimId: (persistedKyp as KYPPolicy).claimId ?? claim.id,
+      patientName: (persistedKyp as KYPPolicy).patientName ?? claim.patientName,
+    };
+  }, [claim, currentKyp]);
+
   // Combined data for Policy Intelligence Report
   const policyReportData = useMemo(() => {
     if (!claim) return null;
@@ -1070,6 +1100,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
     mimeType?: string;
     type?: string;
     documentId?: string;
+    uploadedAt?: string;
   }) => {
     try {
       // A registry ID always wins over any historic inline preview payload.
@@ -1084,6 +1115,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
         documentId: document.documentId,
         fileName: document.name,
         category: document.type,
+        uploadedAt: document.uploadedAt,
       });
 
       const preview = await documentsApi.previewClaimDocument(String(storedDocument.id));
@@ -2301,7 +2333,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                     </div>
                   </div>
                   {(() => {
-                    const allEventDocs: Array<{ name: string; data?: string; mimeType?: string; type?: string; documentId?: string }> = [];
+                    const allEventDocs: Array<{ name: string; data?: string; mimeType?: string; type?: string; documentId?: string; uploadedAt?: string }> = [];
 
                     if (event.fileData) {
                       allEventDocs.push({
@@ -2327,6 +2359,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                               mimeType: d.mimeType || d.type,
                               type: d.type,
                               documentId: d.documentId || d.document_id || d.id,
+                              uploadedAt: d.uploadedAt || event.date,
                             });
                           }
                         }
@@ -2347,7 +2380,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                 </div>
 
                 {(() => {
-                  const allEventDocs: Array<{ name: string; data?: string; mimeType?: string; type?: string; documentId?: string }> = [];
+                  const allEventDocs: Array<{ name: string; data?: string; mimeType?: string; type?: string; documentId?: string; uploadedAt?: string }> = [];
 
                   if (event.fileData) {
                     allEventDocs.push({
@@ -2373,6 +2406,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                             mimeType: d.mimeType || d.type,
                             type: d.type,
                             documentId: d.documentId || d.document_id || d.id,
+                            uploadedAt: d.uploadedAt || event.date,
                           });
                         }
                       }
@@ -2653,15 +2687,17 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                     />
                   </Link>
 
-                  <button
-                    onClick={() => {
-                      setSelectedKyp(currentKyp);
-                      setIsPolicyModalOpen(true);
-                    }}
-                    className="px-4 py-1.5 bg-[#b91c1c] text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg hover:bg-red-800 transition-all active:scale-95 flex items-center mr-2 animate-in fade-in duration-300"
-                  >
-                    <Sparkles size={12} className="mr-1.5" /> Know Your Policy
-                  </button>
+                  {submittedKyp && (
+                    <button
+                      onClick={() => {
+                        setSelectedKyp(submittedKyp);
+                        setIsPolicyModalOpen(true);
+                      }}
+                      className="px-4 py-1.5 bg-[#b91c1c] text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg hover:bg-red-800 transition-all active:scale-95 flex items-center mr-2 animate-in fade-in duration-300"
+                    >
+                      <Sparkles size={12} className="mr-1.5" /> Know Your Policy
+                    </button>
+                  )}
 
                   <div className="flex items-center space-x-2 ml-2">
                     <span className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-[9px] font-black uppercase tracking-[0.2em] border border-emerald-200">
@@ -3387,7 +3423,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                                   )}
                                 </div>
                                 {(() => {
-                                   const allEventDocs: Array<{ name: string; data?: string; mimeType?: string; documentId?: string }> = [];
+                                   const allEventDocs: Array<{ name: string; data?: string; mimeType?: string; documentId?: string; uploadedAt?: string }> = [];
 
                                    if (event.fileData) {
                                      allEventDocs.push({
@@ -3411,6 +3447,7 @@ const ClaimProcessCenter: React.FC<ClaimProcessCenterProps> = ({
                                              data: d.data,
                                               mimeType: d.mimeType || "application/pdf",
                                               documentId: d.documentId || d.document_id || d.id,
+                                              uploadedAt: d.uploadedAt || event.date,
                                            });
                                          }
                                        }

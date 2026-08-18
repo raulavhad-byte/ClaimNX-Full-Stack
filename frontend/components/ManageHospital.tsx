@@ -263,47 +263,15 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
     },
     apiConfig: user.apiConfig || {
       webhookUrl: '',
-      apiKey: 'claimnx_partner_key_123',
+      // API keys are created, stored, and rotated only by the backend.
+      // The client must never ship a default/shared partner secret.
+      apiKey: '',
       externalIntegEnabled: false,
       autoUpdateEnabled: false
     },
     invoiceGenerationType: user.invoiceGenerationType || 'Centralized', // Default
     walletBalance: user.walletBalance || 0,
-    transactions: (user.transactions && user.transactions.length > 0) ? user.transactions : [
-      {
-        id: 'tx-101',
-        date: '2025-06-21T18:45:00Z',
-        type: 'Debit',
-        amount: 4500,
-        description: 'Invoice INV-2025-001 Settled',
-        gateway: 'Razorpay',
-        gatewayTxnId: 'pay_RP_MOCK9212',
-        gatewayOrderId: 'order_RP_or_342125',
-        reconciliationStatus: 'Reconciled (Auto Match)',
-        bankRef: 'ref_bank_8123982312'
-      },
-      {
-        id: 'tx-102',
-        date: '2025-06-15T16:20:00Z',
-        type: 'Credit',
-        amount: 10000,
-        description: 'Wallet Recharge via Razorpay',
-        gateway: 'Razorpay',
-        gatewayTxnId: 'pay_RP_MOCK8721',
-        gatewayOrderId: 'order_RP_or_109283',
-        reconciliationStatus: 'Reconciled (Auto Match)',
-        bankRef: 'ref_bank_2129831923'
-      },
-      {
-        id: 'tx-103',
-        date: '2025-05-01T10:00:00Z',
-        type: 'Credit',
-        amount: 5000,
-        description: 'Initial Wallet Setup Bonus',
-        gateway: 'Wallet',
-        reconciliationStatus: 'Reconciled (Auto Match)'
-      }
-    ],
+    transactions: user.transactions || [],
     documents: user.documents || [
       { name: 'Accreditation certificates (ISO/NABH/NABL/EQAS)', validity: 'NA', count: 0, status: 'Incomplete', files: [] },
       { name: '17/2 Tax Exemption', validity: 'NA', count: 0, status: 'Incomplete', files: [] },
@@ -317,6 +285,27 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
       { name: 'Hospital Brochure', validity: 'NA', count: 0, status: 'Incomplete', files: [] },
     ]
   });
+
+  useEffect(() => {
+    if (!formData.id) return;
+    let active = true;
+    Promise.all([
+      usersApi.getProfileAssetUrl(formData.id, 'hospital-seal'),
+      usersApi.getProfileAssetUrl(formData.id, 'doctor-stamp'),
+    ]).then(([seal, stamp]) => {
+      if (!active) return;
+      setFormData((current) => ({
+        ...current,
+        hospitalSeal: seal?.asset_url || '',
+        hospitalSealStoragePath: seal?.storage_path || current.hospitalSealStoragePath,
+        doctorStamp: stamp?.asset_url || '',
+        doctorStampStoragePath: stamp?.storage_path || current.doctorStampStoragePath,
+      }));
+    }).catch(() => {
+      // Missing assets are a valid state for newly onboarded hospitals.
+    });
+    return () => { active = false; };
+  }, [formData.id]);
 
   const handleInputChange = (field: keyof HospitalUser, value: any) => {
     let finalVal = value;
@@ -507,45 +496,24 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
     }
   };
 
-  const resizeTo100x100 = (file: File): Promise<string> => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = 300; // Increased resolution for better seal quality
-          canvas.height = 300; 
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
-            ctx.clearRect(0, 0, 300, 300);
-            const ratio = Math.min(300 / img.width, 300 / img.height);
-            const newWidth = img.width * ratio;
-            const newHeight = img.height * ratio;
-            const x = (300 - newWidth) / 2;
-            const y = (300 - newHeight) / 2;
-            ctx.drawImage(img, x, y, newWidth, newHeight);
-            resolve(canvas.toDataURL('image/png', 0.95));
-          }
-        };
-        img.src = e.target?.result as string;
-      };
-      reader.readAsDataURL(file);
-    });
-  };
-
   const handleAssetUpload = async (field: 'hospitalSeal' | 'doctorStamp', file: File | null) => {
     if (!file) return;
+    if (!formData.id) {
+      showToast?.('Save the hospital profile before uploading digital assets.', 'error');
+      return;
+    }
     setProcessingImage(field);
     try {
-      const resizedDataUrl = await resizeTo100x100(file);
-      const updated = { ...formData, [field]: resizedDataUrl };
+      const kind = field === 'hospitalSeal' ? 'hospital-seal' : 'doctor-stamp';
+      const result = await usersApi.uploadProfileAsset(formData.id, kind, file);
+      const pathField = field === 'hospitalSeal' ? 'hospitalSealStoragePath' : 'doctorStampStoragePath';
+      const updated = { ...formData, [field]: result.asset_url, [pathField]: result.storage_path };
       setFormData(updated);
-      onUpdate(updated); // Save immediately
+      onUpdate(updated);
+      showToast?.(`${field === 'hospitalSeal' ? 'Hospital seal' : 'Doctor stamp'} saved securely.`, 'success');
     } catch (err) {
       console.error("Image processing failed:", err);
+      showToast?.(err instanceof Error ? err.message : 'Unable to upload digital asset.', 'error');
     } finally {
       setTimeout(() => setProcessingImage(null), 800);
     }
@@ -1575,33 +1543,7 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
                                  </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-100 text-xs font-bold text-slate-700">
-                                 {[
-                                   ...(formData.transactions || []).filter(t => t.gateway),
-                                   {
-                                     id: 'mock-tx-1',
-                                     date: '2025-06-20T18:45:00Z',
-                                     type: 'Debit',
-                                     amount: 4500,
-                                     description: 'Invoice Settled (Razorpay)',
-                                     gateway: 'Razorpay',
-                                     gatewayTxnId: 'pay_RP_MOCK9212',
-                                     gatewayOrderId: 'order_RP_or_342125',
-                                     reconciliationStatus: 'Reconciled (Auto Match)',
-                                     bankRef: 'ref_bank_8123982312'
-                                   },
-                                   {
-                                     id: 'mock-tx-2',
-                                     date: '2025-06-15T16:20:00Z',
-                                     type: 'Credit',
-                                     amount: 10000,
-                                     description: 'Online Gateway Recharge (Razorpay)',
-                                     gateway: 'Razorpay',
-                                     gatewayTxnId: 'pay_RP_MOCK8721',
-                                     gatewayOrderId: 'order_RP_or_109283',
-                                     reconciliationStatus: 'Reconciled (Auto Match)',
-                                     bankRef: 'ref_bank_2129831923'
-                                   }
-                                 ].map((tx: any) => (
+                                 {(formData.transactions || []).filter(t => t.gateway).map((tx: any) => (
                                     <tr key={tx.id} className="hover:bg-slate-50/50 transition-colors group whitespace-nowrap">
                                        <td className="px-6 py-6 text-slate-550 min-w-[140px]">
                                           <p className="font-extrabold text-slate-700">{formatDate(tx.date)}</p>
@@ -1630,6 +1572,13 @@ const ManageHospital: React.FC<ManageHospitalProps> = ({
                                        </td>
                                     </tr>
                                  ))}
+                                 {(formData.transactions || []).filter(t => t.gateway).length === 0 && (
+                                   <tr>
+                                     <td colSpan={6} className="px-6 py-12 text-center text-[10px] font-black uppercase tracking-widest text-slate-400">
+                                       No persisted gateway transactions
+                                     </td>
+                                   </tr>
+                                 )}
                               </tbody>
                            </table>
                         </div>

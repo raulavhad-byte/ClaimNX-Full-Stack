@@ -24,6 +24,7 @@ import MdIndiaTemplate from './MdIndiaTemplate';
 import MedsaveTemplate from './MedsaveTemplate';
 import HealthIndiaTemplate from './HealthIndiaTemplate';
 import VidalHealthTemplate from './VidalHealthTemplate';
+import OfficialPreauthTemplatePreview from './OfficialPreauthTemplatePreview';
 import { fetchEntityContactDetails } from '../services/geminiService';
 import EmailTemplatesManager from './EmailTemplatesManager';
 import ManualDiagnosisReview from './ManualDiagnosisReview';
@@ -41,6 +42,7 @@ import AdminClaimsList from './AdminClaimsList';
 import { INTEGRATIONS } from '../constants';
 import { toast } from 'sonner';
 import { configApi } from '../services/api';
+import { claimnxApi } from '../services/claimnx-api';
 import { ApiDocs } from './ApiDocs';
 import { AuthConfig } from './AuthConfig';
 import AutomatedReportingSystem from './AutomatedReportingSystem';
@@ -262,7 +264,30 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   const [connectorSubTab, setConnectorSubTab] = useState<'Insurers' | 'TPAs' | 'Templates'>('Insurers');
   const [searchTerm, setSearchTerm] = useState('');
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [centralMailboxEmail, setCentralMailboxEmail] = useState('');
+  const [isConnectingCentralMailbox, setIsConnectingCentralMailbox] = useState(false);
+  const [internalMailbox, setInternalMailbox] = useState<{ id: string; email_address: string; status: string; provider: string; updated_at: string } | null>(null);
+  const [isLoadingInternalMailbox, setIsLoadingInternalMailbox] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+
+  const loadInternalMailbox = async () => {
+    try {
+      setIsLoadingInternalMailbox(true);
+      const mailbox = await claimnxApi.get<{ id: string; email_address: string; status: string; provider: string; updated_at: string } | null>('/email/internal/mailbox');
+      setInternalMailbox(mailbox ?? null);
+      setCentralMailboxEmail(mailbox?.email_address ?? '');
+    } catch (error: any) {
+      toast.error(error?.message || 'Unable to load the central ClaimNX mailbox.');
+    } finally {
+      setIsLoadingInternalMailbox(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'integrations' && ['SUPER ADMIN', 'ADMIN'].includes(String(hospitalUser.role || '').toUpperCase())) {
+      void loadInternalMailbox();
+    }
+  }, [activeTab, hospitalUser.role]);
   
   // Entity Management State
   const [editingEntity, setEditingEntity] = useState<InsuranceEntity | null>(null);
@@ -484,7 +509,36 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       p_gender: "Male",
       p_contact: "9876543210",
       p_policy_no: "POL-SAMPLE-123",
+      p_other_insurance: "No",
+      p_family_physician: "No",
       m_prov_diag: "Acute Medical Condition Sample",
+      m_illness: "Acute medical condition with fever",
+      m_clinical_findings: "Stable vitals; clinical observation required",
+      m_duration: "3",
+      m_first_cons_date: "2026-08-18",
+      m_past_history: "No relevant past history",
+      m_treatment_type: "Medical Management",
+      m_is_rta: "No",
+      m_rta_police: "No",
+      m_abuse_alcohol: "No",
+      m_test_conducted: "No",
+      m_investigation_details: "Blood tests and imaging",
+      m_surgery_name: "",
+      m_icd_code: "R50.9",
+      m_icd_pcs_code: "",
+      dr_name: "Dr. Sample Physician",
+      dr_contact: "9876543210",
+      adm_time: "10:30",
+      adm_stay_days: "3",
+      adm_icu_days: "0",
+      adm_room_type: "General Ward",
+      cost_room_rent: 15000,
+      cost_investigation: 10000,
+      cost_icu: 0,
+      cost_ot: 0,
+      cost_prof_fees: 18000,
+      cost_medicines: 12000,
+      cost_other: 2000,
       adm_total_cost: 125000,
       hospitalSeal: hospitalUser.hospitalSeal,
       doctorStamp: hospitalUser.doctorStamp,
@@ -492,8 +546,8 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
     };
 
     switch(name) {
-       case 'Star Health Standard': return <StarHealthTemplate formData={mockData} />;
-       case 'Tata AIG Standard': return <TataAigTemplate formData={mockData} />;
+       case 'Star Health Standard': return <OfficialPreauthTemplatePreview template="star-health" formData={mockData} />;
+       case 'Tata AIG Standard': return <OfficialPreauthTemplatePreview template="tata-aig" formData={mockData} />;
        case 'HDFC ERGO Standard': return <HdfcErgoTemplate formData={mockData} />;
        case 'ICICI Lombard Standard': return <IciciLombardTemplate formData={mockData} />;
        case 'Care Health Insurance Standard': return <CareHealthTemplate formData={mockData} />;
@@ -519,7 +573,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8 pb-20 animate-in fade-in duration-500">
+    <div className="w-full max-w-none mx-auto space-y-8 pb-20 animate-in fade-in duration-500">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>
           <h1 className="text-2xl font-black text-slate-800 uppercase tracking-tight">System Schema Control</h1>
@@ -721,7 +775,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
              </div>
              <div className="flex-1 overflow-y-auto bg-slate-100/50 p-6 lg:p-12 custom-scrollbar">
                 <div className="w-full flex justify-center pb-20">
-                   <div className="origin-top transform scale-[0.65] md:scale-[0.85] lg:scale-[1.0] transition-transform duration-500 shadow-2xl">
+                   <div className={`${['Star Health Standard', 'Tata AIG Standard'].includes(selectedEntityForTemplate.templateName || '') ? 'w-full' : 'origin-top transform scale-[0.65] md:scale-[0.85] lg:scale-[1.0]'} transition-transform duration-500 shadow-2xl`}>
                       {renderActiveTemplate(selectedEntityForTemplate.templateName || 'Generic IRDAI (Dashed)')}
                    </div>
                 </div>
@@ -1134,6 +1188,12 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
       {activeTab === 'integrations' && (hospitalUser.role?.toUpperCase() === 'SUPER ADMIN' || hospitalUser.role?.toUpperCase() === 'ADMIN') && (
         <div className="space-y-12 animate-in fade-in duration-500">
+           <div className="bg-gradient-to-r from-[#000080] to-blue-700 p-8 rounded-[2.5rem] text-white shadow-xl">
+              <div className="flex flex-col lg:flex-row lg:items-end gap-6 justify-between">
+                 <div><div className="flex items-center gap-3"><Mail size={26} /><h3 className="text-xl font-black uppercase">Internal ClaimNX Mailbox</h3></div><p className="mt-2 text-xs text-blue-100">Central sender for automated reports and platform dispatch. This mailbox is not shown in Hospital Management.</p>{isLoadingInternalMailbox ? <p className="mt-3 text-[10px] font-bold text-blue-100">Checking connection…</p> : internalMailbox ? <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-emerald-400/20 px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-emerald-100"><span className="h-2 w-2 rounded-full bg-emerald-300" />Connected · {internalMailbox.email_address} · {internalMailbox.provider}</div> : <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-amber-400/20 px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-amber-100"><span className="h-2 w-2 rounded-full bg-amber-300" />No central mailbox connected</div>}</div>
+                 <div className="flex flex-col sm:flex-row gap-3 w-full lg:w-auto"><input value={centralMailboxEmail} onChange={(event) => setCentralMailboxEmail(event.target.value)} type="email" placeholder="claimnxgeneration@gmail.com" className="min-w-72 px-5 py-3 rounded-2xl text-sm font-bold text-slate-800 outline-none" /><button disabled={isConnectingCentralMailbox || !centralMailboxEmail.trim()} onClick={async () => { try { setIsConnectingCentralMailbox(true); const result = await claimnxApi.post<{ authorizationUrl: string }>('/email/internal/gmail/oauth/authorize', { emailAddress: centralMailboxEmail, displayName: 'ClaimNX Central Dispatch' }); window.location.assign(result.authorizationUrl); } catch (error: any) { toast.error(error?.message || 'Unable to begin central mailbox connection.'); setIsConnectingCentralMailbox(false); } }} className="px-6 py-3 rounded-2xl bg-white text-[#000080] text-[10px] font-black uppercase tracking-widest disabled:opacity-60">{isConnectingCentralMailbox ? 'Opening Google…' : internalMailbox ? 'Change Email' : 'Connect Gmail'}</button></div>
+              </div>
+           </div>
            {/* Global Settings Section */}
            <div className="bg-white p-10 rounded-[3rem] border border-slate-200 shadow-sm">
               <div className="flex items-center gap-5 mb-10">

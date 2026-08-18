@@ -83,7 +83,7 @@ const ReportDownloadCenter: React.FC<{ hospitalProfile: HospitalUser }> = ({ hos
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">Last Generated</span>
               <span className="text-xs font-black text-slate-700 uppercase">Today, 09:30 AM</span>
            </div>
-           <button className="p-3 bg-white border border-slate-200 rounded-2xl text-slate-400 hover:text-emerald-600 hover:border-emerald-200 transition-all active:scale-95 shadow-sm">
+           <button onClick={() => window.location.reload()} title="Refresh this screen" className="p-3 bg-white border border-slate-200 rounded-2xl text-slate-400 hover:text-emerald-600 hover:border-emerald-200 transition-all active:scale-95 shadow-sm">
               <RefreshCw size={20} />
            </button>
         </div>

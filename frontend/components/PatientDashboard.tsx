@@ -85,7 +85,7 @@ interface PatientDashboardProps {
   claims: Claim[];
   kypPolicies: KYPPolicy[];
   setKypPolicies: React.Dispatch<React.SetStateAction<KYPPolicy[]>>;
-  onUpdateClaim: (claim: Claim) => void;
+  onUpdateClaim: (claim: Claim) => void | Promise<void>;
   hospitalProfile: any;
   setProfileInitialTab?: (tab: any) => void;
   setShowProfileModule?: (show: boolean) => void;
@@ -160,7 +160,7 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
   const [replyFileData, setReplyFileData] = useState<string | null>(null);
   const [replyFileName, setReplyFileName] = useState<string | null>(null);
   const [replyFileType, setReplyFileType] = useState<string | null>(null);
-  const [replyFiles, setReplyFiles] = useState<Array<{ id: string, name: string, data: string, type: string }>>([]);
+  const [replyFiles, setReplyFiles] = useState<Array<{ id: string, name: string, type: string, file: File }>>([]);
 
   const handleAddReplyFiles = (filesList: FileList | File[]) => {
     if (!filesList) return;
@@ -174,23 +174,16 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
         hasSizeError = true;
         return;
       }
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const base64 = ev.target?.result?.toString().split(',')[1];
-        if (base64) {
-          const fileId = `${file.name}-${Date.now()}-${Math.random()}`;
-          setReplyFiles(prev => {
-            if (prev.length >= 3) return prev;
-            return [...prev, {
-              id: fileId,
-              name: file.name,
-              data: base64,
-              type: file.type
-            }];
-          });
-        }
-      };
-      reader.readAsDataURL(file);
+      const fileId = `${file.name}-${Date.now()}-${Math.random()}`;
+      setReplyFiles(prev => {
+        if (prev.length >= 3) return prev;
+        return [...prev, {
+          id: fileId,
+          name: file.name,
+          type: file.type,
+          file,
+        }];
+      });
     });
 
     if (hasSizeError) {
@@ -943,8 +936,8 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
     if (replyFiles && replyFiles.length > 0) {
         stageData.documents = replyFiles.map(rf => ({
             name: rf.name,
-            data: rf.data,
-            type: rf.type
+            type: 'QUERY_REPLY',
+            mimeType: rf.type,
         }));
     } else if (replyFileData) {
         stageData.documents = [
@@ -1016,7 +1009,19 @@ const PatientDashboard: React.FC<PatientDashboardProps> = ({
       ...assignmentUpdates
     };
 
-    onUpdateClaim(updatedClaim);
+    await Promise.resolve(onUpdateClaim(updatedClaim));
+    if (replyFiles.length > 0) {
+      try {
+        await Promise.all(replyFiles.map((replyFile) => documentsApi.uploadClaimFile({
+          claimId: selectedClaimForReply.id,
+          file: replyFile.file,
+          category: 'QUERY_REPLY',
+        })));
+      } catch (error: any) {
+        console.error('Query reply document persistence failed', error);
+        toast.error(error?.message || 'The reply was saved, but one or more documents could not be stored.');
+      }
+    }
     setIsSubmittingReply(false);
     setShowReplyModal(false);
     setReplyComment('');

@@ -128,10 +128,7 @@ const ManageClaims: React.FC<ManageClaimsProps> = ({
 
   const handleRefresh = () => {
     setIsRefreshing(true);
-    toast.success("Claims directory refreshed successfully.");
-    setTimeout(() => {
-      setIsRefreshing(false);
-    }, 800);
+    window.location.reload();
   };
 
   const sortedAndFilteredClaims = useMemo(() => {

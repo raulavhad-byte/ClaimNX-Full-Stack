@@ -262,7 +262,7 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
     return approveRoles.includes(currentUser?.role) || currentUser?.isAdmin;
   }, [currentUser]);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement> | File) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement> | File) => {
     if (!canEdit) {
       toast.error("You do not have permission to upload documents");
       return;
@@ -270,11 +270,25 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
     const isFile = typeof File === 'function' && e instanceof File;
     const file = isFile ? (e as File) : (e as React.ChangeEvent<HTMLInputElement>).target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const url = event.target?.result as string;
+      if (!claim?.id) {
+        toast.error('A saved claim is required before uploading the policy document.');
+        return;
+      }
+      try {
+        const document = await documentsApi.uploadClaimFile({
+          claimId: claim.id,
+          file,
+          category: 'POLICY_DOCUMENT',
+        });
+        const preview = await documentsApi.previewClaimDocument(document.id);
+        const url = preview?.preview_url ?? preview?.data?.preview_url;
+        if (!url) throw new Error('The secure document preview could not be created.');
         setPolicyFile(url);
-                          setViewingDocument({ url, name: file.name, type: file.type });
+        setViewingDocument({ url, name: file.name, type: file.type });
+        setPersistedClaimDocs((current) => [
+          ...current.filter((item) => item.name !== file.name),
+          { url, name: file.name, type: file.type },
+        ]);
         toast.success("Policy document uploaded successfully");
         // Audit log for document upload
         auditService.log({
@@ -287,8 +301,10 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
         });
         // Auto-fill upon upload
         handleSimulateAI();
-      };
-      reader.readAsDataURL(file);
+      } catch (error: any) {
+        console.error('Policy document persistence failed', error);
+        toast.error(error?.message || 'Unable to store the policy document securely.');
+      }
     }
   };
 
@@ -1387,9 +1403,16 @@ const KYPForm: React.FC<KYPFormProps> = ({ policy, claim, hospitals = [], onClos
                        </div>
                        <button 
                         onClick={() => {
-                          setViewingDocument({ url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf', name: h.comment || 'Query Document' });
-                          toast.info(`Viewing document from query history: ${h.comment || 'Document'}`);
+                          const document = persistedClaimDocs[0];
+                          if (!document) {
+                            toast.error('No persisted query document is available for this history entry.');
+                            return;
+                          }
+                          setViewingDocument(document);
+                          setShowDocViewer(true);
+                          toast.info(`Viewing persisted claim document: ${document.name}`);
                         }}
+                        disabled={persistedClaimDocs.length === 0}
                         className={`p-1 rounded-lg transition-all ${viewingDocument?.name === (h.comment || 'Related Document') ? 'hover:bg-blue-500 text-white' : 'hover:bg-blue-100 text-blue-600'}`}
                       >
                         <Eye size={10} />

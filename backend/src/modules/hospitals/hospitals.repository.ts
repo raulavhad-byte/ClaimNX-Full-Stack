@@ -14,9 +14,9 @@ export class HospitalsRepository extends BaseRepository {
       table: 'hospitals',
 
       searchableColumns: [
-        'name',
+        'hospital_name',
         'rohini_id',
-        'registration_no',
+        'hospital_code',
         'city',
         'phone',
         'email',

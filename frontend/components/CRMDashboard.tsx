@@ -1993,7 +1993,16 @@ CRM Team
                                     try {
                                       const response = await claimsApi.acceptForCrmReview(claim.id);
                                       onUpdateClaim(response.data);
+                                      // Acceptance is a workflow transition, not merely an
+                                      // assignment. Show the reviewer the destination queue
+                                      // immediately so the accepted claim cannot appear to be
+                                      // left in Action Pending.
+                                      setActiveTab('under-review');
                                       toast.success('Claim accepted and assigned to you');
+                                      // Continue directly into the accepted claim's CRM work
+                                      // screen. The persisted state above guarantees it is
+                                      // already in the Under Review bucket on arrival.
+                                      navigate(`/crm-handle/${claim.id}`);
                                     } catch (error: any) {
                                       toast.error(error?.message || 'Unable to accept claim');
                                     } finally {
@@ -2010,7 +2019,7 @@ CRM Team
                                   onClick={() => navigate(`/crm-handle/${claim.id}`)}
                                   className="px-6 py-2 bg-emerald-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-md active:scale-95 flex items-center gap-2"
                                 >
-                                  <Send size={12} /> Submit Claim
+                                  <Eye size={12} /> View Claim
                                 </button>
                               )}
                             </div>

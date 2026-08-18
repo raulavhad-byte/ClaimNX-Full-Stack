@@ -9,7 +9,7 @@ interface MedsaveTemplateProps {
 const UnderlineField: React.FC<{ label: string; value: string; className?: string; boldValue?: boolean; subLabel?: string }> = ({ label, value, className = "", boldValue = true, subLabel }) => (
   <div className={`flex items-end border-b border-black/20 pb-0.5 ${className}`}>
     <span className="text-[8.5px] font-bold text-slate-700 whitespace-nowrap mr-2 leading-none uppercase">{label}</span>
-    <span className={`text-[9.5px] uppercase flex-1 truncate leading-none ${boldValue ? 'font-black text-black' : 'font-medium text-slate-600'}`}>{value}</span>
+    <span className={`text-[9.5px] uppercase flex-1 truncate leading-none ${boldValue ? 'font-black text-[#00338d]' : 'font-medium text-[#00338d]'}`}>{value}</span>
     {subLabel && <span className="text-[7.5px] font-bold text-slate-500 whitespace-nowrap ml-2">{subLabel}</span>}
   </div>
 );

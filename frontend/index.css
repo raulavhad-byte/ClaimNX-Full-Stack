@@ -82,6 +82,35 @@ input[type="date"]::-webkit-datetime-edit-year-field,
   animation: blink 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
+/*
+ * Pre-auth templates are legal A4 documents. Keep the page box identical in
+ * browser preview and html2canvas export; previously it only existed under
+ * @media print, so the generated PDF was scaled from a content-height page.
+ * Width remains fluid on small screens so the preview never overflows.
+ */
+#claim-template-printable > div > [class~="max-w-[210mm]"],
+#claim-template-offscreen > div > [class~="max-w-[210mm]"] {
+  box-sizing: border-box;
+  min-height: 297mm;
+}
+
+.official-preauth-page {
+  container-type: inline-size;
+  width: min(100%, 210mm);
+}
+
+.official-preauth-check::before {
+  content: "\\2713";
+  color: #00338d;
+}
+
+@media screen {
+  #claim-template-printable > div > [class~="max-w-[210mm]"] {
+    width: min(210mm, 100%);
+    max-width: 100%;
+  }
+}
+
 @media print {
   body * {
     visibility: hidden;

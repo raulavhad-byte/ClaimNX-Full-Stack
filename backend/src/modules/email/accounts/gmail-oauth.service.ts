@@ -33,7 +33,7 @@ export class GmailOAuthService {
     private readonly vault: MailCredentialVaultService,
   ) {}
 
-  async begin(emailAddress: string, displayName: string | undefined, actor: OAuthActor, requestedHospitalId?: string) {
+  async begin(emailAddress: string, displayName: string | undefined, actor: OAuthActor, requestedHospitalId?: string, isInternal = false) {
     const email = this.normalizeEmail(emailAddress);
     const actorHospitalId = actor.hospitalId ?? actor.hospital_id;
     const permissions = Array.isArray(actor.permissions) ? actor.permissions.map(String) : [];
@@ -69,6 +69,7 @@ export class GmailOAuthService {
         requested_by: actor.id,
         requested_email_address: email,
         display_name: displayName?.trim() || null,
+        is_internal: isInternal,
         expires_at: expiresAt.toISOString(),
       });
     if (error) throw error;
@@ -137,8 +138,20 @@ export class GmailOAuthService {
     const updatedAccount = await this.accounts.update(account.id, {
       credential_reference: `vault://mail-account-credentials/${account.id}`,
       status: 'ACTIVE',
+      is_internal: Boolean(authorization.is_internal),
       updated_by: authorization.requested_by,
     });
+    // A central ClaimNX sender is singular. Replacing it must retire the
+    // previous internal mailbox so future dispatches cannot use an old sender.
+    if (authorization.is_internal) {
+      const { error: retirementError } = await this.databaseService.getClient()
+        .from('mail_accounts')
+        .update({ status: 'DISCONNECTED', updated_at: new Date().toISOString() })
+        .eq('is_internal', true)
+        .eq('is_deleted', false)
+        .neq('id', updatedAccount.id);
+      if (retirementError) throw retirementError;
+    }
     const { error: consumedError } = await this.databaseService.getClient()
       .from('mail_oauth_authorization_states')
       .update({ consumed_at: new Date().toISOString() })

@@ -13,7 +13,7 @@ const GridBox: React.FC<{ value: string; length: number; label?: string; subLabe
       {label && <span className="text-[7.5px] font-black text-slate-800 uppercase mb-0.5 leading-none">{label}</span>}
       <div className="flex border-l border-t border-black bg-white">
         {chars.map((char, i) => (
-          <div key={i} className="w-[11px] h-[12px] border-r border-b border-black flex items-center justify-center text-[8px] font-black text-black">
+<div key={i} className="w-[11px] h-[12px] shrink-0 border-r border-b border-black flex items-center justify-center text-[8px] font-black text-[#00338d]">
             {char === ' ' ? '' : char}
           </div>
         ))}
@@ -35,7 +35,7 @@ const DateGrid: React.FC<{ value: string; label?: string }> = ({ value, label })
       {label && <span className="text-[7.5px] font-black text-slate-800 uppercase mb-0.5">{label}</span>}
       <div className="flex">
         {sequence.map((char, i) => (
-          <div key={i} className={`w-[11px] h-[12px] border border-black flex items-center justify-center text-[8px] font-black bg-white ${i === 1 || i === 3 ? 'mr-1' : '-ml-[1px]'}`}>
+<div key={i} className={`w-[11px] h-[12px] shrink-0 border border-black flex items-center justify-center text-[8px] font-black text-[#00338d] bg-white ${i === 1 || i === 3 ? 'mr-1' : '-ml-[1px]'}`}>
             {char}
           </div>
         ))}
@@ -59,13 +59,13 @@ const TimeGrid: React.FC<{ value: string; label?: string }> = ({ value, label })
       {label && <span className="text-[7.5px] font-black text-slate-800 uppercase mb-0.5">{label}</span>}
       <div className="flex items-center space-x-1">
         <div className="flex border border-black bg-white">
-           <div className="w-[11px] h-[12px] border-r border-black flex items-center justify-center text-[8px] font-black">{hChars[0]}</div>
-           <div className="w-[11px] h-[12px] flex items-center justify-center text-[8px] font-black">{hChars[1]}</div>
+           <div className="w-[11px] h-[12px] shrink-0 border-r border-black flex items-center justify-center text-[8px] font-black text-[#00338d]">{hChars[0]}</div>
+           <div className="w-[11px] h-[12px] shrink-0 flex items-center justify-center text-[8px] font-black text-[#00338d]">{hChars[1]}</div>
         </div>
         <span className="font-black text-[10px]">:</span>
         <div className="flex border border-black bg-white">
-           <div className="w-[11px] h-[12px] border-r border-black flex items-center justify-center text-[8px] font-black">{mChars[0]}</div>
-           <div className="w-[11px] h-[12px] flex items-center justify-center text-[8px] font-black">{mChars[1]}</div>
+           <div className="w-[11px] h-[12px] shrink-0 border-r border-black flex items-center justify-center text-[8px] font-black text-[#00338d]">{mChars[0]}</div>
+           <div className="w-[11px] h-[12px] shrink-0 flex items-center justify-center text-[8px] font-black text-[#00338d]">{mChars[1]}</div>
         </div>
       </div>
     </div>
@@ -84,7 +84,7 @@ const TickBox: React.FC<{ label: string; checked: boolean; className?: string }>
 const UnderlineField: React.FC<{ label: string; value: string; className?: string }> = ({ label, value, className = "" }) => (
   <div className={`flex items-end border-b border-black/20 pb-0.5 ${className}`}>
     <span className="text-[8px] font-bold text-slate-700 whitespace-nowrap mr-2 leading-none uppercase">{label}</span>
-    <span className="text-[9px] font-black text-black uppercase flex-1 truncate leading-none">{value}</span>
+    <span className="text-[9px] font-black text-[#00338d] uppercase flex-1 truncate leading-none">{value}</span>
   </div>
 );
 

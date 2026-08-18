@@ -16,7 +16,7 @@ interface UnderlineFieldProps {
 const UnderlineField: React.FC<UnderlineFieldProps> = ({ label, value, subLabel, className = "" }) => (
   <div className={`flex items-end space-x-2 border-b border-black pb-0.5 mt-2 ${className}`}>
     <span className="text-[8px] font-bold text-black whitespace-nowrap">{label}</span>
-    <span className="text-[9px] font-black text-blue-700 uppercase flex-1 min-h-[14px]">{value}</span>
+    <span className="text-[9px] font-black text-[#00338d] uppercase flex-1 min-h-[14px]">{value}</span>
     {subLabel && <span className="text-[7px] font-bold text-slate-500 whitespace-nowrap italic">{subLabel}</span>}
   </div>
 );

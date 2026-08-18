@@ -4,6 +4,7 @@ import { DatabaseModule } from '../../database/database.module';
 import { SharedModule } from '../../shared/shared.module';
 
 import { AuthModule } from '../auth/auth.module';
+import { AuditModule } from '../audit/audit.module';
 
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
@@ -14,6 +15,7 @@ import { UsersRepository } from './users.repository';
     DatabaseModule,
     SharedModule,
     AuthModule,
+    AuditModule,
   ],
 
   controllers: [

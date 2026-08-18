@@ -640,11 +640,7 @@ const KYPDashboard: React.FC<KYPDashboardProps> = ({
         </div>
         <div className="flex items-center gap-2">
           <button 
-            onClick={() => {
-              setSearchQuery('');
-              setStatusFilter('All');
-              toast.success("Dashboard data refreshed");
-            }}
+            onClick={() => window.location.reload()}
             className="px-5 py-2 bg-amber-400 text-white rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-amber-500 transition-all shadow-md shadow-amber-200 active:scale-95 flex items-center"
           >
             <RefreshCw size={12} className="mr-2" /> Refresh

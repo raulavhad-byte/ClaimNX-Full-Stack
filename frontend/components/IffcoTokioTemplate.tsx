@@ -20,7 +20,7 @@ const IffcoTokioLogo: React.FC = () => (
 const UnderlineField: React.FC<{ label: string; value: string; className?: string }> = ({ label, value, className = "" }) => (
   <div className={`flex items-end border-b border-slate-300 pb-0.5 ${className}`}>
     <span className="text-[9px] font-bold text-slate-700 whitespace-nowrap mr-2 uppercase">{label}</span>
-    <span className="text-[10px] font-black text-black uppercase flex-1 truncate leading-none">{value}</span>
+    <span className="text-[10px] font-black text-[#00338d] uppercase flex-1 truncate leading-none">{value}</span>
   </div>
 );
 

@@ -17,7 +17,7 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Claim, ClaimStatus, HospitalUser, InsuranceEntity, Product } from '../types';
-import { claimsApi } from '../services/api';
+import { claimsApi, reimbursementApi } from '../services/api';
 import { FastDOBPicker } from './FastDOBPicker';
 
 interface PartnerProcessingFormProps {
@@ -60,6 +60,7 @@ const PartnerProcessingForm: React.FC<PartnerProcessingFormProps> = ({
     caseSource: 'Internal User',
     // Recovery & Recon Specific Fields
     claimId: '',
+    parentCaseId: '',
     dischargeDate: '',
     finalBillAmt: '',
     finalApprovalAmt: ''
@@ -69,6 +70,7 @@ const PartnerProcessingForm: React.FC<PartnerProcessingFormProps> = ({
     let error = '';
     const isKYP = product === Product.KYP;
     const isRecovery = product === Product.RECOVERY_RECONCILIATION;
+    const isPrePost = product === Product.PRE_POST;
 
     if (!value && [
       'patientName', 'diagnosis', 'gender', 'mobileNo',
@@ -79,6 +81,7 @@ const PartnerProcessingForm: React.FC<PartnerProcessingFormProps> = ({
       isRecovery && 'dischargeDate',
       isRecovery && 'finalBillAmt',
       isRecovery && 'finalApprovalAmt'
+      , isPrePost && 'parentCaseId'
     ].filter(Boolean).includes(name)) {
       error = 'This field is mandatory';
     }
@@ -143,6 +146,7 @@ const PartnerProcessingForm: React.FC<PartnerProcessingFormProps> = ({
     // For KYP, we don't need admissionDate as a mandatory field for the initial form
     const isKYP = product === Product.KYP;
     const isRecovery = product === Product.RECOVERY_RECONCILIATION;
+    const isPrePost = product === Product.PRE_POST;
     const newErrors: { [key: string]: string } = {};
 
     const mandatoryFields = [
@@ -154,6 +158,7 @@ const PartnerProcessingForm: React.FC<PartnerProcessingFormProps> = ({
       isRecovery && 'dischargeDate',
       isRecovery && 'finalBillAmt',
       isRecovery && 'finalApprovalAmt'
+      , isPrePost && 'parentCaseId'
     ].filter(Boolean) as string[];
 
     mandatoryFields.forEach(field => {
@@ -294,10 +299,51 @@ const PartnerProcessingForm: React.FC<PartnerProcessingFormProps> = ({
         }]
       };
 
+      const productCodeMap: Record<string, 'ICA' | 'PRE_POST' | 'PARTNER_PROCESSING' | 'KYP' | 'RECOVERY_RECON'> = {
+        [Product.ICA]: 'ICA',
+        [Product.PRE_POST]: 'PRE_POST',
+        [Product.PARTNER_PROCESSING]: 'PARTNER_PROCESSING',
+        [Product.KYP]: 'KYP',
+        [Product.RECOVERY_RECONCILIATION]: 'RECOVERY_RECON',
+      };
+      const productCode = productCodeMap[product];
+      const hospitalId = hospitalProfile.hospitalId || hospitalProfile.parentHospitalId || hospitalProfile.id;
+      if (!productCode || !hospitalId) {
+        throw new Error('The reimbursement product or hospital scope is missing.');
+      }
+
+      // The reimbursement case is the system of record.  Do this first so a
+      // rejected server-side validation never leaves a browser/legacy-only
+      // claim record that users may mistake for a live operational case.
+      const reimbursementCase = await reimbursementApi.create({
+          productCode,
+          hospitalId,
+          claimId: product === Product.RECOVERY_RECONCILIATION ? formData.claimId || undefined : undefined,
+          parentCaseId: product === Product.PRE_POST ? formData.parentCaseId : undefined,
+          totalClaimedAmount: Number(newClaim.estimatedCost || 0),
+          metadata: {
+            ...formData,
+            patientName: formData.patientName || null,
+            policyNumber: formData.policyNumber || null,
+            diagnosis: formData.diagnosis || null,
+            source: formData.caseSource || 'Internal User',
+            attachedDocuments: attachedDocs.map((document: any) => ({
+              id: document?.id ?? null,
+              name: document?.name ?? null,
+              type: document?.type ?? null,
+            })),
+          },
+      });
+
+      // This temporary compatibility record lets unchanged patient/claim
+      // screens continue to open the case.  Workflow state and authorisation
+      // remain in the backend reimbursement case above.
+      newClaim.formData.reimbursementCaseId = reimbursementCase?.id;
+      let persistedClaim: any;
       if (onSave) {
-        await onSave(newClaim);
+        persistedClaim = await onSave(newClaim);
       } else {
-        await claimsApi.create(newClaim);
+        persistedClaim = (await claimsApi.create(newClaim)).data;
       }
       toast.success(`${product} case submitted successfully`);
       const segmentMap: Record<string, string> = {
@@ -453,6 +499,19 @@ const PartnerProcessingForm: React.FC<PartnerProcessingFormProps> = ({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {product === Product.PRE_POST && (
+                <div className="space-y-1.5 lg:col-span-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 flex items-center">
+                    <FileText size={12} className="mr-1.5" /> Verified Parent ICA Reimbursement Case ID <span className="text-rose-500 ml-1">*</span>
+                  </label>
+                  <input
+                    type="text" name="parentCaseId" value={formData.parentCaseId} onChange={handleInputChange}
+                    className={`w-full px-5 py-3.5 bg-slate-50 border ${errors.parentCaseId ? 'border-rose-500' : 'border-slate-200'} rounded-2xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-300 transition-all font-mono`}
+                    placeholder="Select or enter the verified ICA reimbursement case UUID" required
+                  />
+                  <p className="text-[9px] font-medium text-slate-400 ml-1">Pre/Post bills can only be processed against a verified ICA master case.</p>
+                </div>
+              )}
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 flex items-center">
                     <User size={12} className="mr-1.5" /> Patient Name <span className="text-rose-500 ml-1">*</span>

@@ -17,7 +17,7 @@ const TickBox: React.FC<{ label?: string; checked: boolean; className?: string }
 const UnderlineField: React.FC<{ label: string; value: string; className?: string; bold?: boolean }> = ({ label, value, className = "", bold = true }) => (
   <div className={`flex items-end border-b border-black/20 pb-0.5 ${className}`}>
     <span className="text-[8px] font-bold text-slate-700 whitespace-nowrap mr-2 leading-none uppercase">{label}</span>
-    <span className={`text-[9px] uppercase flex-1 truncate leading-none ${bold ? 'font-black text-black' : 'font-medium text-slate-600'}`}>{value}</span>
+    <span className={`text-[9px] uppercase flex-1 truncate leading-none ${bold ? 'font-black text-[#00338d]' : 'font-medium text-[#00338d]'}`}>{value}</span>
   </div>
 );
 

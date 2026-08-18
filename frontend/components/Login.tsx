@@ -3,7 +3,6 @@ import React, { useState, useEffect } from 'react';
 import { ShieldCheck, Lock, Mail, Loader2, Hospital, Zap, ShieldAlert, ChevronRight, HeartPulse, ShieldPlus, CheckCircle, X, Send, Key, RefreshCw, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { auditService } from '../services/auditService';
-import { DISABLE_FIRESTORE } from '../services/dualStorageService';
 import { claimnxSessionService } from '../services/claimnx-session-service';
 
 interface LoginProps {
@@ -16,6 +15,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('claimnx_remember_email') !== null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
 
   // Forgot Password States
   const [showForgotModal, setShowForgotModal] = useState(false);
@@ -53,6 +53,17 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     }
   }, [email, rememberMe]);
 
+  useEffect(() => {
+    const markOnline = () => setIsOnline(true);
+    const markOffline = () => setIsOnline(false);
+    window.addEventListener('online', markOnline);
+    window.addEventListener('offline', markOffline);
+    return () => {
+      window.removeEventListener('online', markOnline);
+      window.removeEventListener('offline', markOffline);
+    };
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -72,7 +83,6 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     try {
       // The NestJS API is the source of truth for production authentication.
       await claimnxSessionService.login(email.trim(), password);
-      localStorage.setItem('claimnx_manual_auth', email.trim());
 
       auditService.log({
         userId: email.trim(),
@@ -84,57 +94,15 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
       onLogin(email.trim());
       return;
-    } catch (backendAuthError: any) {
-      // Legacy browser-only authentication is retained solely for local Vite
-      // development when explicitly opted in. Strict API testing must never
-      // turn an invalid backend login into a cached local admin session.
-      const strictApiMode = import.meta.env.VITE_CLAIMNX_STRICT_API === 'true';
-      if (strictApiMode || !import.meta.env.DEV || !DISABLE_FIRESTORE) {
-        claimnxSessionService.clear();
-        localStorage.removeItem('claimnx_manual_auth');
-        setError(backendAuthError?.message || 'Unable to sign in. Please verify your credentials.');
-        return;
-      }
-
-      console.warn('[Auth] Backend login unavailable; using local development authentication.', backendAuthError);
-
-      try {
-        const localUsersKey = 'claimnx_hospital_users';
-        let localUsers: any[] = [];
-        try {
-          localUsers = JSON.parse(localStorage.getItem(localUsersKey) || '[]');
-        } catch (localStorageError) {
-          try {
-            localUsers = JSON.parse(localStorage.getItem('claimnx_users') || '[]');
-          } catch {
-            localUsers = [];
-          }
-        }
-
-        const user = localUsers.find((candidate: any) =>
-          candidate.username?.toLowerCase() === email.toLowerCase() ||
-          candidate.email?.toLowerCase() === email.toLowerCase() ||
-          candidate.emailId?.toLowerCase() === email.toLowerCase(),
-        );
-
-        if (user && (!user.password || user.password === password) && password.length > 3) {
-          localStorage.setItem('claimnx_manual_auth', email);
-          onLogin(email);
-          return;
-        }
-
-        if (email.toLowerCase() === 'raulavhad@gmail.com' && password.length > 3) {
-          localStorage.setItem('claimnx_manual_auth', email);
-          onLogin(email);
-          return;
-        }
-
-        setError('Account not found in local development storage.');
-        return;
-      } catch (localAuthError: any) {
-        setError(localAuthError?.message || 'Unable to sign in using local development storage.');
-        return;
-      }
+    } catch (backendAuthError: unknown) {
+      claimnxSessionService.clear();
+      localStorage.removeItem('claimnx_manual_auth');
+      setError(
+        backendAuthError instanceof Error
+          ? backendAuthError.message
+          : 'Unable to sign in. Please try again.',
+      );
+      return;
     }
     finally {
       setIsLoading(false);
@@ -147,18 +115,14 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       toast.error("Please enter a valid registered email address.");
       return;
     }
-    setIsResetting(true);
-    setTimeout(() => {
-      setIsResetting(false);
-      const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
-      setSentOtp(generatedCode);
-      toast.success(`OTP code generated! Check code: ${generatedCode}`);
-    }, 1000);
+    // Password reset must be delivered and verified by a backend identity
+    // provider. Never generate OTPs or mutate passwords in browser storage.
+    setError('Password reset is not available in this build. Contact your system administrator.');
   };
 
   const handleVerifyOtpAndReset = (e: React.FormEvent) => {
     e.preventDefault();
-    if (otpCode.trim() !== sentOtp) {
+    if (!sentOtp || otpCode.trim() !== sentOtp) {
       toast.error("Invalid OTP verification code. Please check and try again.");
       return;
     }
@@ -171,72 +135,9 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       return;
     }
 
-    setIsResetting(true);
-    setTimeout(() => {
-      performPasswordUpdate(resetEmail, newPassword);
-      setIsResetting(false);
-      setResetDone(true);
-      setResetSuccessMsg(`Password successfully updated for ${resetEmail}. You can now sign in.`);
-    }, 1000);
+    setError('Password reset must be completed through the backend identity service.');
   };
 
-  const performPasswordUpdate = (targetEmail: string, newPass: string) => {
-    try {
-      const emailLower = targetEmail.trim().toLowerCase();
-      
-      // Update in claimnx_hospital_users
-      const savedUsersStr = localStorage.getItem('claimnx_hospital_users');
-      if (savedUsersStr) {
-        let users: any[] = JSON.parse(savedUsersStr);
-        let updated = false;
-        users = users.map((u: any) => {
-          if (u.username?.toLowerCase() === emailLower || u.email?.toLowerCase() === emailLower || u.emailId?.toLowerCase() === emailLower) {
-            updated = true;
-            return { ...u, password: newPass, portalPass: newPass };
-          }
-          return u;
-        });
-        if (updated) {
-          localStorage.setItem('claimnx_hospital_users', JSON.stringify(users));
-        }
-      }
-
-      // Update in claimnx_users
-      const usersStr = localStorage.getItem('claimnx_users');
-      if (usersStr) {
-        let users: any[] = JSON.parse(usersStr);
-        let updated = false;
-        users = users.map((u: any) => {
-          if (u.username?.toLowerCase() === emailLower || u.email?.toLowerCase() === emailLower || u.emailId?.toLowerCase() === emailLower) {
-            updated = true;
-            return { ...u, password: newPass };
-          }
-          return u;
-        });
-        if (updated) {
-          localStorage.setItem('claimnx_users', JSON.stringify(users));
-        }
-      }
-
-      // Pre-fill email in main form so user can sign in easily
-      setEmail(targetEmail.trim());
-      if (rememberMe) {
-        localStorage.setItem('claimnx_remember_email', targetEmail.trim());
-      }
-
-      auditService.log({
-        userId: targetEmail,
-        action: 'PASSWORD_RESET',
-        resourceType: 'Auth',
-        resourceId: targetEmail,
-        details: 'User reset access key password'
-      });
-
-      toast.success("Access Key updated successfully!");
-    } catch (err) {
-      console.error("Error saving updated password", err);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-[#f8fafc] flex items-center justify-center p-4 lg:p-8 font-sans relative overflow-hidden">
@@ -290,8 +191,10 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
           <div className="relative z-10 pt-8 border-t border-white/10 flex items-center justify-between">
             <div className="flex items-center space-x-2">
-              <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-white/60">Network Connected</p>
+              <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`}></div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-white/60">
+                {isOnline ? 'Network Connected' : 'Network Unavailable'}
+              </p>
             </div>
             <p className="text-[10px] font-black uppercase tracking-widest text-white/50">V 2.5.0-PRO</p>
           </div>

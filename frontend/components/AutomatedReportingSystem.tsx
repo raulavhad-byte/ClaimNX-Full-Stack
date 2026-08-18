@@ -1,15 +1,16 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Plus, Search, Calendar, Clock, Filter, Mail, MessageSquare, 
   Download, Activity, ShieldCheck, Zap, BarChart3, 
   Settings2, History, AlertCircle, CheckCircle2, XCircle,
   ChevronRight, ArrowRight, UserCheck, Globe, Building2,
-  PieChart, TrendingUp, DollarSign, Bell, MailOpen, Link as LinkIcon, Edit2, Trash2, X, RefreshCw, Send, ListFilter, Play, FileText, Code
+  PieChart, TrendingUp, DollarSign, Bell, MailOpen, Link as LinkIcon, Edit2, Trash2, X, RefreshCw, Send, ListFilter, Play, FileText, Code, Paperclip, Bold, Italic, Underline, List
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Product, HospitalUser, ReportConfig, ReportDeliveryLog, AutomatedReportTemplate } from '../types';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import { claimnxApi } from '../services/claimnx-api';
 
 const FREQUENCIES = ['Daily', 'Weekly', 'Monthly', 'Quarterly'];
 const CHANNELS = [
@@ -36,79 +37,44 @@ const AutomatedReportingSystem: React.FC<{ hospitalUsers?: HospitalUser[], hospi
   const [editingConfig, setEditingConfig] = useState<Partial<ReportConfig> | null>(null);
   const [editingTemplate, setEditingTemplate] = useState<Partial<AutomatedReportTemplate> | null>(null);
 
-  // Mock templates
-  const [templates, setTemplates] = useState<AutomatedReportTemplate[]>([
-    {
-      id: 'tmpl-1',
-      name: 'Standard Hospital Daily Summary',
-      type: 'Email',
-      subject: 'Daily Operations Pulse: {{hospitalName}}',
-      body: 'Hello {{hospitalName}},\n\nYour performance report for {{dateRange}} is ready.\n\nKPI Summary:\n- Total Cases: {{totalCases}}\n- Approved: {{approvedCases}}\n- Approval Ratio: {{approvalRatio}}%\n\n--- ENCLOSED RECONCILIATION SUMMARY ---\n{{reconciliationSummary}}\n\n--- AGING ANALYSIS ---\n{{agingAnalysis}}\n\nView full details here: {{portalLink}}\n\nRegards,\nBima Garage Team',
-      placeholders: ['hospitalName', 'dateRange', 'totalCases', 'approvedCases', 'approvalRatio', 'reconciliationSummary', 'agingAnalysis', 'portalLink']
-    }
-  ]);
+  const [templates, setTemplates] = useState<AutomatedReportTemplate[]>([]);
 
-  // Mock data for initial view
-  const [configs, setConfigs] = useState<ReportConfig[]>([
-    {
-      id: 'rpt-1',
-      name: 'Daily Operations Pulse',
-      products: [Product.CPC, Product.BG_DESK],
-      frequency: { type: 'Daily', time: '09:00' },
-      recipients: { zones: ['North', 'West'] },
-      deliveryChannels: ['Email', 'Portal'],
-      status: 'Active',
-      createdBy: 'Super Admin',
-      createdAt: '2025-01-01T09:00:00Z'
-    },
-    {
-      id: 'rpt-2',
-      name: 'Monthly Financial Settlement Report',
-      products: [Product.RECOVERY_RECONCILIATION],
-      frequency: { type: 'Monthly', day: '1', time: '10:00' },
-      recipients: { states: ['Maharashtra', 'Karnataka'] },
-      deliveryChannels: ['Email', 'SMS', 'Portal'],
-      status: 'Active',
-      createdBy: 'Super Admin',
-      createdAt: '2025-01-05T10:00:00Z'
-    }
-  ]);
+  const [configs, setConfigs] = useState<ReportConfig[]>([]);
+  const [logs, setLogs] = useState<ReportDeliveryLog[]>([]);
+  const [manualAttachments, setManualAttachments] = useState<Array<{ filename: string; contentType: string; contentBase64: string }>>([]);
+  const manualAttachmentInputRef = useRef<HTMLInputElement>(null);
 
-  const [logs] = useState<ReportDeliveryLog[]>([
-    {
-      id: 'log-1',
-      configId: 'rpt-1',
-      reportName: 'Daily Operations Pulse',
-      deliveredToId: 'hosp-1',
-      deliveredToName: 'Apollo Hospital',
-      channel: 'Email',
-      status: 'Delivered',
-      timestamp: new Date().toISOString(),
-      metadata: { totalCases: 45, approvedCases: 38, pendingCases: 7 }
-    },
-    {
-      id: 'log-2',
-      configId: 'rpt-2',
-      reportName: 'Monthly Financial Settlement Report',
-      deliveredToId: 'hosp-2',
-      deliveredToName: 'Fortis Healthcare',
-      channel: 'SMS',
-      status: 'Sent',
-      timestamp: new Date().toISOString()
-    }
-  ]);
+  const refreshAutomations = async () => {
+    try {
+      const [savedConfigs, savedLogs, savedTemplates] = await Promise.all([
+        claimnxApi.get<any[]>('/report-automations'),
+        claimnxApi.get<any[]>('/report-automations/logs'),
+        claimnxApi.get<any[]>('/report-automations/templates'),
+      ]);
+      setConfigs((savedConfigs ?? []).map((item: any) => ({ id: item.id, name: item.name, products: item.products ?? [], frequency: item.frequency, recipients: { hospitals: item.recipient_hospital_ids ?? [] }, deliveryChannels: ['Email'], status: item.status === 'ACTIVE' ? 'Active' : 'Paused', lastRunAt: item.last_run_at, createdBy: item.created_by ?? 'System', createdAt: item.created_at, templateId: item.template_id ?? undefined })));
+      setLogs((savedLogs ?? []).map((item: any) => ({ id: item.id, configId: item.config_id ?? '', reportName: item.report_name, deliveredToId: item.hospital_id ?? '', deliveredToName: item.recipient_email, channel: 'Email', status: item.status === 'SENT' ? 'Sent' : 'Failed', timestamp: item.created_at, error: item.error_message })));
+      setTemplates((savedTemplates ?? []).map((item: any) => ({ id: item.id, name: item.name, type: 'Email', subject: item.subject, body: item.body, placeholders: [] })));
+    } catch (error: any) { toast.error(error?.message || 'Unable to load automated reports.'); }
+  };
+
+  useEffect(() => { void refreshAutomations(); }, []);
 
   const [manualRequest, setManualRequest] = useState({ 
     hospitalId: '', 
     to: '', 
     cc: '', 
+    bcc: '',
     subject: '', 
     body: '',
     templateId: templates[0]?.id || ''
   });
 
+  // Hospital cards in the portal also carry a user/profile ID. Report APIs
+  // require the actual hospitals table UUID, which is provided as hospitalId.
+  const databaseHospitalId = (hospital: HospitalUser) => hospital.hospitalId || hospital.id;
+
   const handleManualHospitalChange = (hId: string) => {
-    const hospital = hospitals.find(h => h.id === hId);
+    const hospital = hospitals.find(h => databaseHospitalId(h) === hId);
     const template = templates.find(t => t.id === manualRequest.templateId) || templates[0];
     
     if (hospital && template) {
@@ -129,7 +95,7 @@ const AutomatedReportingSystem: React.FC<{ hospitalUsers?: HospitalUser[], hospi
   };
 
   const handleManualTemplateChange = (tId: string) => {
-    const hospital = hospitals.find(h => h.id === manualRequest.hospitalId);
+    const hospital = hospitals.find(h => databaseHospitalId(h) === manualRequest.hospitalId);
     const template = templates.find(t => t.id === tId);
     
     if (hospital && template) {
@@ -148,6 +114,32 @@ const AutomatedReportingSystem: React.FC<{ hospitalUsers?: HospitalUser[], hospi
     }
   };
 
+  const addManualAttachments = async (files: FileList | null) => {
+    if (!files?.length) return;
+    const selected = Array.from(files);
+    if (selected.some((file) => file.size > 25 * 1024 * 1024)) {
+      toast.error('Each attachment must be 25 MB or smaller.');
+      return;
+    }
+    const currentBytes = manualAttachments.reduce((total, attachment) => total + Math.floor((attachment.contentBase64.length * 3) / 4), 0);
+    const selectedBytes = selected.reduce((total, file) => total + file.size, 0);
+    if (currentBytes + selectedBytes > 25 * 1024 * 1024) {
+      toast.error('The combined size of all attachments must not exceed 25 MB.');
+      return;
+    }
+    const encoded = await Promise.all(selected.map(async (file) => ({
+      filename: file.name,
+      contentType: file.type || 'application/octet-stream',
+      contentBase64: await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+        reader.onerror = () => reject(new Error(`Unable to read ${file.name}`));
+        reader.readAsDataURL(file);
+      }),
+    })));
+    setManualAttachments((current) => [...current, ...encoded]);
+  };
+
   const stats = useMemo(() => {
     return {
       totalSent: logs.length,
@@ -157,40 +149,26 @@ const AutomatedReportingSystem: React.FC<{ hospitalUsers?: HospitalUser[], hospi
     };
   }, [logs, configs]);
 
-  const handleSaveConfig = () => {
+  const handleSaveConfig = async () => {
     if (!editingConfig?.name) return;
     
-    if (editingConfig.id) {
-      setConfigs(configs.map(c => c.id === editingConfig.id ? (editingConfig as ReportConfig) : c));
-    } else {
-      const newConfig: ReportConfig = {
-        ...(editingConfig as ReportConfig),
-        id: `rpt-${Date.now()}`,
-        createdAt: new Date().toISOString(),
-        createdBy: 'Super Admin',
-        status: 'Active'
-      };
-      setConfigs([...configs, newConfig]);
-    }
-    setShowConfigModal(false);
-    setEditingConfig(null);
+    try {
+      await claimnxApi.post('/report-automations', { name: editingConfig.name, products: editingConfig.products ?? [], frequency: editingConfig.frequency, recipientHospitalIds: editingConfig.recipients?.hospitals ?? [], templateId: editingConfig.templateId });
+      await refreshAutomations(); setShowConfigModal(false); setEditingConfig(null); toast.success('Automation saved and activated.');
+    } catch (error: any) { toast.error(error?.message || 'Unable to save automation.'); }
   };
 
-  const handleSaveTemplate = () => {
-    if (!editingTemplate?.name) return;
-    
-    if (editingTemplate.id) {
-      setTemplates(templates.map(t => t.id === editingTemplate.id ? (editingTemplate as AutomatedReportTemplate) : t));
-    } else {
-      const newTemplate: AutomatedReportTemplate = {
-        ...(editingTemplate as AutomatedReportTemplate),
-        id: `tmpl-${Date.now()}`,
-        placeholders: ['hospitalName', 'dateRange', 'totalCases', 'approvedCases', 'portalLink']
-      };
-      setTemplates([...templates, newTemplate]);
-    }
-    setShowTemplateModal(false);
-    setEditingTemplate(null);
+  const handleSaveTemplate = async () => {
+    if (!editingTemplate?.name || !editingTemplate.subject || !editingTemplate.body) return;
+    try {
+      const payload = { name: editingTemplate.name, subject: editingTemplate.subject, body: editingTemplate.body };
+      if (editingTemplate.id) await claimnxApi.patch(`/report-automations/templates/${editingTemplate.id}`, payload);
+      else await claimnxApi.post('/report-automations/templates', payload);
+      await refreshAutomations();
+      setShowTemplateModal(false);
+      setEditingTemplate(null);
+      toast.success('Report template saved to the backend.');
+    } catch (error: any) { toast.error(error?.message || 'Unable to save the report template.'); }
   };
 
   return (
@@ -326,7 +304,7 @@ const AutomatedReportingSystem: React.FC<{ hospitalUsers?: HospitalUser[], hospi
                     </div>
                   </div>
                   
-                  <button className="mt-4 w-full py-3 bg-white border border-slate-200 rounded-xl text-[9px] font-black uppercase text-slate-600 hover:bg-blue-50 hover:text-blue-600 transition-all flex items-center justify-center gap-2">
+                  <button onClick={async () => { try { await claimnxApi.post(`/report-automations/${config.id}/run`); await refreshAutomations(); toast.success('Report run started.'); } catch (error: any) { toast.error(error?.message || 'Unable to run report.'); } }} className="mt-4 w-full py-3 bg-white border border-slate-200 rounded-xl text-[9px] font-black uppercase text-slate-600 hover:bg-blue-50 hover:text-blue-600 transition-all flex items-center justify-center gap-2">
                     <Play size={12} /> Trigger Manual Run
                   </button>
                 </div>
@@ -491,6 +469,14 @@ const AutomatedReportingSystem: React.FC<{ hospitalUsers?: HospitalUser[], hospi
                         placeholder="e.g. Daily Operations Pulse"
                       />
                       <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Email Template</label>
+                        <select value={editingConfig.templateId || ''} onChange={e => setEditingConfig({ ...editingConfig, templateId: e.target.value || undefined })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-[1.5rem] text-sm font-bold outline-none">
+                          <option value="">Use standard backend report message</option>
+                          {templates.map(template => <option key={template.id} value={template.id}>{template.name}</option>)}
+                        </select>
+                        <p className="mt-2 text-[9px] font-medium text-slate-400">Templates are stored and rendered by the backend with current report data.</p>
+                      </div>
+                      <div>
                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Products Under Report</label>
                         <div className="grid grid-cols-2 gap-2">
                           {PRODUCTS.map(p => (
@@ -588,14 +574,10 @@ const AutomatedReportingSystem: React.FC<{ hospitalUsers?: HospitalUser[], hospi
                       />
                       <div>
                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Hospital Specific</label>
-                         <div className="relative">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" size={14} />
-                            <input 
-                              type="text" 
-                              placeholder="Search hospitals..." 
-                              className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none" 
-                            />
-                         </div>
+                         <select multiple value={editingConfig.recipients?.hospitals || []} onChange={(event) => setEditingConfig({ ...editingConfig, recipients: { ...editingConfig.recipients!, hospitals: Array.from(event.target.selectedOptions, option => option.value) } })} className="w-full min-h-28 p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none">
+                           {hospitals.map(hospital => <option key={hospital.id} value={databaseHospitalId(hospital)}>{hospital.hospitalName}</option>)}
+                         </select>
+                         <p className="mt-2 text-[9px] font-medium text-slate-400">Select one or more hospitals. Each report is sent to its registered email address.</p>
                       </div>
                     </div>
                   </Section>
@@ -758,124 +740,91 @@ const AutomatedReportingSystem: React.FC<{ hospitalUsers?: HospitalUser[], hospi
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-lg bg-white rounded-[2.5rem] p-10 shadow-2xl border border-slate-100"
+              className="relative w-full max-w-6xl min-h-[650px] overflow-hidden bg-white rounded-[1.4rem] shadow-2xl border border-slate-200"
             >
-              <div className="flex items-center justify-between mb-8">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-[#000080] text-white rounded-2xl flex items-center justify-center shadow-lg">
-                    <Send size={24} />
-                  </div>
-                  <div>
-                    <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Manual Report Dispatch</h3>
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Send on-demand hospital reports</p>
-                  </div>
+              <div className="h-10 px-4 flex items-center justify-between bg-slate-50 border-b border-slate-200">
+                <span className="flex items-center gap-2 text-[10px] font-bold text-slate-500"><span className="w-2 h-2 bg-emerald-400 rounded-full" />Report draft</span>
+                <button onClick={() => setShowManualModal(false)} className="p-1 hover:bg-slate-200 rounded transition-all" aria-label="Close report email composer"><X size={16} className="text-slate-400" /></button>
+              </div>
+              <div className="p-5 md:p-7 space-y-0">
+                <div className="grid grid-cols-1 lg:grid-cols-[1fr,1fr] border-b border-slate-200">
+                  <label className="flex items-center gap-3 py-3 pr-5 border-b lg:border-b-0 lg:border-r border-slate-200">
+                    <span className="w-16 shrink-0 text-[10px] font-black uppercase tracking-widest text-slate-400">Hospital</span>
+                    <select value={manualRequest.hospitalId} onChange={(e) => handleManualHospitalChange(e.target.value)} className="min-w-0 flex-1 bg-transparent text-sm font-bold text-slate-700 outline-none">
+                      <option value="">Select a hospital...</option>
+                      {hospitals.map(h => <option key={h.id} value={databaseHospitalId(h)}>{h.hospitalName}</option>)}
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-3 py-3 lg:pl-5">
+                    <span className="w-16 shrink-0 text-[10px] font-black uppercase tracking-widest text-slate-400">Template</span>
+                    <select value={manualRequest.templateId} onChange={(e) => handleManualTemplateChange(e.target.value)} className="min-w-0 flex-1 bg-transparent text-sm font-bold text-slate-700 outline-none">
+                      {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </label>
                 </div>
-                <button onClick={() => setShowManualModal(false)} className="p-2 hover:bg-slate-100 rounded-xl transition-all">
-                  <X size={24} className="text-slate-400" />
-                </button>
+                <ComposerField label="To" value={manualRequest.to} onChange={(value) => setManualRequest({ ...manualRequest, to: value })} placeholder="hospital@email.com" />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4">
+                  <ComposerField label="Cc" value={manualRequest.cc} onChange={(value) => setManualRequest({ ...manualRequest, cc: value })} placeholder="comma-separated emails" />
+                  <ComposerField label="Bcc" value={manualRequest.bcc} onChange={(value) => setManualRequest({ ...manualRequest, bcc: value })} placeholder="comma-separated emails" />
+                </div>
+                <ComposerField label="Subject" value={manualRequest.subject} onChange={(value) => setManualRequest({ ...manualRequest, subject: value })} placeholder="Report subject" />
+                <textarea value={manualRequest.body} onChange={(e) => setManualRequest({ ...manualRequest, body: e.target.value })} className="mt-5 h-56 md:h-64 w-full resize-none bg-transparent text-sm leading-6 text-slate-700 outline-none placeholder:text-slate-400" placeholder="Write your report email here..." />
+                <div className="flex flex-wrap items-center gap-4 border-t border-slate-200 pt-3 text-slate-500">
+                  <Bold size={14} /><Italic size={14} /><Underline size={14} /><List size={14} />
+                  <input
+                    ref={manualAttachmentInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={async (event) => {
+                      // Preserve the DOM input before awaiting FileReader work;
+                      // React/browser event targets can be cleared meanwhile.
+                      const input = event.currentTarget;
+                      const files = input.files;
+                      await addManualAttachments(files);
+                      input.value = '';
+                    }}
+                  />
+                  <button type="button" onClick={() => manualAttachmentInputRef.current?.click()} className="ml-auto flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-slate-600 hover:bg-slate-50">
+                    <Paperclip size={14} /> Attach files
+                  </button>
+                  <span className="text-[10px] font-bold text-slate-400">KPI, reconciliation and aging are rendered from current data when sent.</span>
+                </div>
+                {manualAttachments.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {manualAttachments.map((attachment, index) => (
+                      <span key={`${attachment.filename}-${index}`} className="flex max-w-full items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-600">
+                        <Paperclip size={12} className="shrink-0" />
+                        <span className="max-w-[180px] truncate">{attachment.filename}</span>
+                        <button type="button" onClick={() => setManualAttachments((current) => current.filter((_, attachmentIndex) => attachmentIndex !== index))} className="rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-rose-600" aria-label={`Remove ${attachment.filename}`}><X size={12} /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
 
-              <div className="space-y-4 max-h-[60vh] overflow-y-auto px-1 custom-scrollbar">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Select Hospital</label>
-                    <select 
-                      value={manualRequest.hospitalId}
-                      onChange={(e) => handleManualHospitalChange(e.target.value)}
-                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-4 focus:ring-blue-50 transition-all"
-                    >
-                      <option value="">Choose Hospital...</option>
-                      {hospitals.map(h => (
-                        <option key={h.id} value={h.id}>{h.hospitalName}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Use Template</label>
-                    <select 
-                      value={manualRequest.templateId}
-                      onChange={(e) => handleManualTemplateChange(e.target.value)}
-                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-4 focus:ring-blue-50 transition-all"
-                    >
-                      {templates.map(t => (
-                        <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Recipient Email (To)</label>
-                    <input 
-                      type="text"
-                      value={manualRequest.to}
-                      onChange={(e) => setManualRequest({...manualRequest, to: e.target.value})}
-                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-4 focus:ring-blue-50 transition-all"
-                      placeholder="hospital@email.com"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">CC Emails</label>
-                    <input 
-                      type="text"
-                      value={manualRequest.cc}
-                      onChange={(e) => setManualRequest({...manualRequest, cc: e.target.value})}
-                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-4 focus:ring-blue-50 transition-all"
-                      placeholder="comma separated emails..."
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Email Subject</label>
-                  <input 
-                    type="text"
-                    value={manualRequest.subject}
-                    onChange={(e) => setManualRequest({...manualRequest, subject: e.target.value})}
-                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-4 focus:ring-blue-50 transition-all"
-                    placeholder="Enter subject..."
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Email Draft (Body)</label>
-                  <textarea 
-                    value={manualRequest.body}
-                    onChange={(e) => setManualRequest({...manualRequest, body: e.target.value})}
-                    rows={6}
-                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-[1.5rem] text-sm font-bold outline-none focus:ring-4 focus:ring-blue-50 transition-all resize-none"
-                    placeholder="Compose report message..."
-                  />
-                  <p className="text-[9px] text-slate-400 mt-2 font-medium italic">Note: Report PDF will be attached automatically.</p>
-                </div>
-
-                <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex gap-3">
-                   <AlertCircle className="text-amber-600 shrink-0" size={16} />
-                   <p className="text-[10px] text-amber-800 font-bold leading-relaxed">
-                      Manual trigger will use the latest available data as of today for the selected hospital only.
-                   </p>
-                </div>
-              </div>
-
-              <div className="mt-10 flex gap-4">
+              <div className="px-5 md:px-7 pb-5 flex gap-3 border-t border-slate-100 pt-4">
                 <button 
                   onClick={() => setShowManualModal(false)}
-                  className="flex-1 py-4 bg-slate-100 text-slate-500 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-200 transition-all"
+                  className="px-6 py-3 bg-white border border-slate-200 text-slate-500 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-50 transition-all"
                 >
-                  Cancel
+                  Discard
                 </button>
                 <button 
-                  onClick={() => {
-                    // Logic to send report
-                    toast.success(`Report dispatch initiated for ${hospitals.find(h => h.id === manualRequest.hospitalId)?.hospitalName || 'selected hospital'} to ${manualRequest.to}`);
-                    setShowManualModal(false);
-                    setManualRequest({ hospitalId: '', to: '', cc: '', subject: '', body: '', templateId: templates[0]?.id || '' });
+                  onClick={async () => {
+                    try {
+                      await claimnxApi.post('/report-automations/manual-dispatch', { hospitalId: manualRequest.hospitalId, to: manualRequest.to, cc: manualRequest.cc.split(',').map(email => email.trim()).filter(Boolean), bcc: manualRequest.bcc.split(',').map(email => email.trim()).filter(Boolean), subject: manualRequest.subject, body: manualRequest.body, attachments: manualAttachments });
+                      await refreshAutomations();
+                      toast.success('Report dispatched from the central ClaimNX mailbox.');
+                      setShowManualModal(false);
+                      setManualRequest({ hospitalId: '', to: '', cc: '', bcc: '', subject: '', body: '', templateId: templates[0]?.id || '' });
+                      setManualAttachments([]);
+                    } catch (error: any) { toast.error(error?.message || 'Unable to dispatch report.'); }
                   }}
                   disabled={!manualRequest.hospitalId || !manualRequest.to}
-                  className="flex-[2] py-4 bg-[#000080] text-white rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-blue-800 transition-all shadow-xl shadow-blue-900/10 disabled:opacity-50 disabled:grayscale"
+                  className="px-7 py-3 bg-[#1455e8] text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-600 hover:shadow-emerald-900/25 transition-all shadow-lg shadow-blue-900/15 disabled:opacity-50 disabled:grayscale flex items-center gap-2"
                 >
-                  Dispatch Report Now
+                  <Send size={14} /> Send Report
                 </button>
               </div>
             </motion.div>
@@ -885,6 +834,19 @@ const AutomatedReportingSystem: React.FC<{ hospitalUsers?: HospitalUser[], hospi
     </div>
   );
 };
+
+const ComposerField: React.FC<{ label: string; value: string; onChange: (value: string) => void; placeholder: string }> = ({ label, value, onChange, placeholder }) => (
+  <label className="flex items-center gap-3 border-b border-slate-200 py-3">
+    <span className="w-10 shrink-0 text-[10px] font-black uppercase tracking-widest text-slate-400">{label}</span>
+    <input
+      type="text"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      className="min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-700 outline-none placeholder:text-slate-400"
+    />
+  </label>
+);
 
 const StatCard = ({ icon: Icon, label, value, color, trend }: any) => {
   const colors = {

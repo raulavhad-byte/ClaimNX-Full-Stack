@@ -193,26 +193,6 @@ export default function FollowUpEmailModal({
       });
     }
 
-    // 2. Fallback / supplement: Get from localStorage (claimnx_patientDocuments)
-    try {
-      const localDocs = JSON.parse(localStorage.getItem('claimnx_patientDocuments') || '[]');
-      if (Array.isArray(localDocs)) {
-        localDocs.forEach((doc: any) => {
-          if (doc.linkedClaimId === claim.id && doc.fileName && !seenNames.has(doc.fileName)) {
-            if (!isTemplateFile(doc.fileName, doc.documentType)) {
-              seenNames.add(doc.fileName);
-              list.push({
-                name: doc.fileName,
-                size: '1.2 MB'
-              });
-            }
-          }
-        });
-      }
-    } catch (e) {
-      console.warn('Failed to read local patient documents', e);
-    }
-
     return list;
   }, [claim.history, claim.id]);
 

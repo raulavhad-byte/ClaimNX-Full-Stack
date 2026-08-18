@@ -64,6 +64,36 @@ export class EmailCorrespondenceRepository {
     return updated;
   }
 
+  async listMessagesForAccounts(accountIds: string[], folder?: string, limit = 100) {
+    if (!accountIds.length) return [];
+    let query = this.supabase
+      .from('email_messages')
+      .select('id,mail_account_id,claim_id,direction,from_address,to_addresses,cc_addresses,subject,plain_text_body,received_at,sent_at,processing_status,folder,email_attachments(id,file_name,mime_type,size_bytes),claims(claim_number,case_ref_id),mail_accounts!inner(email_address,hospital_id,hospitals(hospital_name,display_name))')
+      .in('mail_account_id', accountIds)
+      .order('received_at', { ascending: false, nullsFirst: false })
+      .order('sent_at', { ascending: false, nullsFirst: false })
+      .limit(Math.min(Math.max(limit, 1), 200));
+    if (folder) query = query.eq('folder', folder);
+    const { data, error } = await query;
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  async countMessagesForAccounts(accountIds: string[]) {
+    if (!accountIds.length) return { INBOX: 0, SENT: 0, DRAFTS: 0, OUTBOX: 0, SPAM: 0 };
+    const { data, error } = await this.supabase
+      .from('email_messages')
+      .select('folder')
+      .in('mail_account_id', accountIds);
+    if (error) throw error;
+    const counts = { INBOX: 0, SENT: 0, DRAFTS: 0, OUTBOX: 0, SPAM: 0 };
+    for (const row of data ?? []) {
+      const folder = String(row.folder || 'INBOX').toUpperCase() as keyof typeof counts;
+      if (folder in counts) counts[folder] += 1;
+    }
+    return counts;
+  }
+
   async addAttachments(attachments: Record<string, unknown>[]) {
     if (!attachments.length) return [];
     const { data, error } = await this.supabase

@@ -34,7 +34,7 @@ export class InboundEmailService {
       ? profile.assignedHospitalIds.map(String)
       : [];
     const actorHospitalId = actor?.hospitalId ?? actor?.hospital_id ?? profile.hospitalId;
-    const hasGlobalAccess = role === 'SUPER ADMIN' || permissions.includes('all');
+    const hasGlobalAccess = !actor || role === 'SUPER ADMIN' || permissions.includes('all');
     if (!hasGlobalAccess && String(actorHospitalId ?? '') !== String(account.hospital_id) && !assignedHospitalIds.includes(String(account.hospital_id))) {
       throw new ForbiddenException('You do not have access to this mailbox.');
     }
@@ -83,6 +83,7 @@ export class InboundEmailService {
       sanitized_html_body: this.stripHtml(email.htmlBody),
       headers: email.headers ?? {},
       raw_metadata: email.rawMetadata ?? {},
+      folder: String((email.rawMetadata as any)?.folder || 'INBOX').toUpperCase() === 'SPAM' ? 'SPAM' : 'INBOX',
       received_at: email.receivedAt ?? new Date(),
       classification: classification.classification,
       classification_confidence: classification.confidence,

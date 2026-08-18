@@ -26,7 +26,7 @@ const DateGrid: React.FC<{ value?: string; label?: string }> = ({ value, label }
       {label && <span className="text-[7.5px] font-bold text-slate-500 uppercase mb-0.5">{label}</span>}
       <div className="flex space-x-0.5">
         {chars.map((char, i) => (
-          <div key={i} className="w-3.5 h-4.5 border border-slate-400 flex items-center justify-center text-[9px] font-black bg-white">
+          <div key={i} className="w-3.5 h-4.5 shrink-0 border border-slate-400 flex items-center justify-center text-[9px] font-black text-[#00338d] bg-white">
             {char}
           </div>
         ))}
@@ -43,7 +43,7 @@ const DateGrid: React.FC<{ value?: string; label?: string }> = ({ value, label }
 const UnderlineField: React.FC<{ label: string; value: string; className?: string }> = ({ label, value, className = "" }) => (
   <div className={`flex items-end border-b border-slate-300 pb-0.5 ${className}`}>
     <span className="text-[9px] font-bold text-slate-700 whitespace-nowrap mr-2 leading-none uppercase">{label}</span>
-    <span className="text-[10px] font-black text-black uppercase flex-1 truncate leading-none">{value}</span>
+    <span className="text-[10px] font-black text-[#00338d] uppercase flex-1 truncate leading-none">{value}</span>
   </div>
 );
 
@@ -244,7 +244,7 @@ const GoDigitTemplate: React.FC<GoDigitTemplateProps> = ({ formData }) => {
                   <span className="text-[7.5px] font-bold text-slate-500 uppercase mb-0.5">b) Time of admission:</span>
                   <div className="flex space-x-0.5">
                     {['H','H','M','M'].map((l, i) => (
-                      <div key={i} className={`w-3.5 h-4.5 border border-slate-400 flex items-center justify-center text-[9px] font-black bg-white ${i === 1 ? 'mr-1' : ''}`}>
+<div key={i} className={`w-3.5 h-4.5 shrink-0 border border-slate-400 flex items-center justify-center text-[9px] font-black text-[#00338d] bg-white ${i === 1 ? 'mr-1' : ''}`}>
                         {formData.adm_time ? (i < 2 ? formData.adm_time.split(':')[0][i] : formData.adm_time.split(':')[1][i-2]) : ' '}
                       </div>
                     ))}
@@ -393,7 +393,7 @@ const GoDigitTemplate: React.FC<GoDigitTemplateProps> = ({ formData }) => {
                     <span className="text-[7.5px] font-bold text-slate-500 uppercase mb-0.5">Time:</span>
                     <div className="flex space-x-0.5">
                        {['H','H','M','M'].map((l, i) => (
-                         <div key={i} className={`w-3.5 h-4.5 border border-slate-400 flex items-center justify-center text-[9px] font-black bg-white ${i === 1 ? 'mr-1' : ''}`}>
+            <div key={i} className={`w-3.5 h-4.5 shrink-0 border border-slate-400 flex items-center justify-center text-[9px] font-black text-[#00338d] bg-white ${i === 1 ? 'mr-1' : ''}`}>
                            {new Date().getHours().toString().padStart(2,'0').split('')[i] || new Date().getMinutes().toString().padStart(2,'0').split('')[i-2]}
                          </div>
                        ))}
@@ -438,7 +438,7 @@ const GoDigitTemplate: React.FC<GoDigitTemplateProps> = ({ formData }) => {
                  <span className="text-[7.5px] font-bold text-slate-500 uppercase mb-0.5">Time:</span>
                  <div className="flex space-x-0.5">
                     {['H','H','M','M'].map((l, i) => (
-                      <div key={i} className={`w-3.5 h-4.5 border border-slate-400 flex items-center justify-center text-[9px] font-black bg-white ${i === 1 ? 'mr-1' : ''}`}>
+            <div key={i} className={`w-3.5 h-4.5 shrink-0 border border-slate-400 flex items-center justify-center text-[9px] font-black text-[#00338d] bg-white ${i === 1 ? 'mr-1' : ''}`}>
                          {new Date().getHours().toString().padStart(2,'0').split('')[i] || new Date().getMinutes().toString().padStart(2,'0').split('')[i-2]}
                       </div>
                     ))}

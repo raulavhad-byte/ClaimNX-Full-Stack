@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 
 import { DatabaseService } from '../../../database/database.service';
 import { AttachmentSecurityService } from './attachment-security.service';
+import { EMAIL_MODULE_CONSTANTS } from '../constants/email.constants';
 
 export interface OutboundAttachmentInput {
   filename: string;
@@ -21,7 +22,7 @@ export class OutboundAttachmentStorageService {
 
   async validate(input: unknown): Promise<OutboundAttachmentInput[]> {
     if (!Array.isArray(input)) return [];
-    return input.map((attachment: any) => {
+    const attachments = input.map((attachment: any) => {
       const filename = String(attachment?.filename ?? '').trim();
       const contentType = String(attachment?.contentType ?? '').trim().toLowerCase();
       const contentBase64 = String(attachment?.contentBase64 ?? '').replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '');
@@ -32,6 +33,11 @@ export class OutboundAttachmentStorageService {
       this.attachmentSecurity.validateAttachment(filename, contentType, sizeBytes);
       return { filename, contentType, contentBase64 };
     });
+    const totalBytes = attachments.reduce((sum, attachment) => sum + Buffer.from(attachment.contentBase64, 'base64').byteLength, 0);
+    if (totalBytes > EMAIL_MODULE_CONSTANTS.MAX_TOTAL_ATTACHMENT_SIZE_BYTES) {
+      throw new BadRequestException('The combined size of all attachments must not exceed 25 MB.');
+    }
+    return attachments;
   }
 
   async store(hospitalId: string, attachments: OutboundAttachmentInput[]) {

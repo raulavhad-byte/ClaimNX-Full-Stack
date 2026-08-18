@@ -1,4 +1,4 @@
-import { ClaimNXApiClient } from './claimnx-api-client';
+import { ClaimNXApiClient, ClaimNXApiError, ClaimNXNetworkError } from './claimnx-api-client';
 
 export interface ClaimNXSession {
   readonly accessToken: string;
@@ -52,10 +52,29 @@ class ClaimNXSessionService {
   }
 
   async login(email: string, password: string): Promise<ClaimNXSession> {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      throw new ClaimNXNetworkError();
+    }
+
     const client = new ClaimNXApiClient({ getAccessToken: () => null });
-    const response = await client.request<Record<string, unknown>>('POST', '/auth/login', {
-      body: { email, password },
-    });
+    let response: Record<string, unknown>;
+    try {
+      response = await client.request<Record<string, unknown>>('POST', '/auth/login', {
+        body: { email, password },
+      });
+    } catch (error) {
+      if (error instanceof ClaimNXNetworkError) throw error;
+
+      // Do not reveal whether an account exists, and do not confuse a server
+      // outage with a credential failure.
+      if (error instanceof ClaimNXApiError && (error.status === 401 || error.status === 403)) {
+        throw new Error('Invalid email or password.');
+      }
+      if (error instanceof ClaimNXApiError && error.status === 429) {
+        throw new Error('Too many sign-in attempts. Please wait a moment and try again.');
+      }
+      throw new Error('ClaimNX sign-in is temporarily unavailable. Please try again shortly.');
+    }
 
     const accessToken =
       readString(response.accessToken) ??

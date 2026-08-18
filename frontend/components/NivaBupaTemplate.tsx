@@ -13,7 +13,7 @@ const CharacterGrid: React.FC<{ value: string; length: number; label?: string; s
       {label && <span className="text-[7.5px] font-bold text-slate-700 uppercase mb-0.5 leading-none">{label}</span>}
       <div className="flex border-l border-t border-slate-300 bg-white">
         {chars.map((char, i) => (
-          <div key={i} className="w-[11.5px] h-[13px] border-r border-b border-slate-300 flex items-center justify-center text-[9px] font-black text-slate-800">
+<div key={i} className="w-[11.5px] h-[13px] shrink-0 border-r border-b border-slate-300 flex items-center justify-center text-[9px] font-black text-[#00338d]">
             {char === ' ' ? '' : char}
           </div>
         ))}
@@ -30,7 +30,7 @@ const DottedGrid: React.FC<{ value: string; length: number; label?: string; subL
       {label && <span className="text-[7.5px] font-bold text-slate-700 uppercase mb-0.5 leading-none">{label}</span>}
       <div className="flex bg-white">
         {chars.map((char, i) => (
-          <div key={i} className="w-[11px] h-[13px] border border-dashed border-slate-300 -mr-[1px] flex items-center justify-center text-[8.5px] font-black text-slate-800">
+<div key={i} className="w-[11px] h-[13px] shrink-0 border border-dashed border-slate-300 -mr-[1px] flex items-center justify-center text-[8.5px] font-black text-[#00338d]">
             {char === ' ' ? '' : char}
           </div>
         ))}
@@ -52,7 +52,7 @@ const TickBox: React.FC<{ label: string; checked: boolean; className?: string }>
 const UnderlineField: React.FC<{ label: string; value: string; className?: string; boldValue?: boolean }> = ({ label, value, className = "", boldValue = true }) => (
   <div className={`flex items-end border-b border-slate-200 pb-0.5 ${className}`}>
     <span className="text-[8.5px] font-bold text-slate-600 whitespace-nowrap mr-2 leading-none uppercase">{label}</span>
-    <span className={`text-[9.5px] uppercase flex-1 truncate leading-none ${boldValue ? 'font-black text-slate-900' : 'font-medium text-slate-600'}`}>{value}</span>
+    <span className={`text-[9.5px] uppercase flex-1 truncate leading-none ${boldValue ? 'font-black text-[#00338d]' : 'font-medium text-[#00338d]'}`}>{value}</span>
   </div>
 );
 

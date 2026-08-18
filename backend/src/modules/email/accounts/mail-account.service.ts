@@ -37,7 +37,7 @@ export class MailAccountService {
       ? profile.assignedHospitalIds.map(String)
       : [];
     const actorHospitalId = String(actor?.hospitalId ?? actor?.hospital_id ?? profile.hospitalId ?? '');
-    const hasCrossHospitalAccess = ['SUPER ADMIN', 'ADMIN', 'MANAGER', 'RECONCILIATION MANAGER', 'RECONCILIATION TEAM', 'ACCOUNTS HEAD'].includes(role)
+    const hasCrossHospitalAccess = ['SUPER ADMIN', 'ADMIN', 'MANAGER', 'CRM TEAM', 'RECONCILIATION MANAGER', 'RECONCILIATION TEAM', 'ACCOUNTS HEAD'].includes(role)
       || permissions.includes('all')
       || permissions.includes('hospitals.update')
       || permissions.includes('reconciliation:recon_approve:oversight');

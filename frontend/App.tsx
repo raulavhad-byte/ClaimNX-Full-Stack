@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import ErrorBoundary from './components/ErrorBoundary';
 import { notificationService } from './services/notificationService';
 import { dualStorageService, DISABLE_FIRESTORE } from './services/dualStorageService';
@@ -650,7 +650,7 @@ const GlobalSearch = ({
   const [results, setResults] = useState<Claim[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [searchFilter, setSearchFilter] = useState<'Case ID' | 'Claim No' | 'Patient Name' | 'UHID' | 'Policy No' | 'UTR No'>('Patient Name');
+  const [searchFilter, setSearchFilter] = useState<'Case ID' | 'Claim No' | 'Patient Name' | 'UHID/IPD' | 'Policy No' | 'UTR No'>('Patient Name');
   const [selectedProduct, setSelectedProduct] = useState<Product | ''>('');
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const navigate = useNavigate();
@@ -762,7 +762,7 @@ const GlobalSearch = ({
             return (c.caseReferenceId || c.claimNumber || '').toLowerCase().includes(searchTerm);
           case 'Claim No':
             return (c.formData?.insurer_claim_no || c.claimNumber || '').toLowerCase().includes(searchTerm);
-          case 'UHID':
+          case 'UHID/IPD':
             return (c.formData?.p_uhid || '').toLowerCase().includes(searchTerm);
           case 'Policy No':
             return (c.policyNumber || '').toLowerCase().includes(searchTerm);
@@ -809,7 +809,7 @@ const GlobalSearch = ({
 
           {isDropdownOpen && (
             <div className="absolute top-[calc(100%+10px)] left-0 min-w-[140px] bg-white border border-slate-400 rounded-lg shadow-2xl z-50 py-0.5 overflow-hidden animate-in fade-in slide-in-from-top-1 duration-150">
-              {(['Case ID', 'Claim No', 'Patient Name', 'UHID', 'Policy No', 'UTR No'] as const).map((filter) => {
+              {(['Case ID', 'Claim No', 'Patient Name', 'UHID/IPD', 'Policy No', 'UTR No'] as const).map((filter) => {
                 const isSelected = searchFilter === filter;
                 return (
                   <button
@@ -1125,30 +1125,24 @@ const AppContent: React.FC = () => {
       }
     } as HospitalUser;
 
-    try {
-      const manualAuth = localStorage.getItem('claimnx_manual_auth');
-      if (manualAuth) {
-        if (manualAuth === 'raulavhad@gmail.com') {
-          return {
-            ...defaultProfile,
-            id: 'primary-admin',
-            username: 'raulavhad@gmail.com',
-            role: 'Primary Admin',
-            isAdmin: true
-          };
-        }
-        const savedUsers = localStorage.getItem('claimnx_hospital_users');
-        if (savedUsers) {
-          const users = JSON.parse(savedUsers) as HospitalUser[];
-          const found = users.find(u => u.username === manualAuth || u.emailId === manualAuth);
-          if (found) return found;
-        }
-      }
-      return defaultProfile;
-    } catch (e) {
-      return defaultProfile;
-    }
+    return defaultProfile;
   });
+
+  const hydratePersistedAvatar = async (userId?: string) => {
+    if (!userId) return;
+    try {
+      const avatar = await usersApi.getAvatarUrl(userId);
+      setHospitalProfile((current) => ({
+        ...current,
+        photoURL: avatar?.avatar_url || '',
+        photoStoragePath: avatar?.storage_path || current.photoStoragePath,
+      }));
+    } catch (error) {
+      // A missing avatar must never prevent the authenticated portal from
+      // loading. Authorization errors and storage failures remain observable.
+      console.warn('Unable to restore the profile image.', error);
+    }
+  };
 
   // Business data is loaded from the API/Supabase only. Browser storage is
   // not a fallback for users or claims because it makes records appear saved
@@ -1196,6 +1190,17 @@ const AppContent: React.FC = () => {
   const [latestNotification, setLatestNotification] = useState<any>(null);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
 
+  // Reload the authoritative claim list for Finance rather than just
+  // re-rendering old browser state. Both dashboard and settlement queues use
+  // this same list, so they are refreshed together.
+  const refreshReconciliationClaims = useCallback(async () => {
+    const sessionUser = claimnxSessionService.getSession()?.user as Record<string, unknown> | undefined;
+    const role = String(sessionUser?.role ?? hospitalProfile.role ?? '').trim().toUpperCase();
+    const isCentralOperationsUser = ['SUPER ADMIN', 'ADMIN', 'PRIMARY ADMIN'].includes(role) || !role.startsWith('HOSPITAL');
+    const response = await claimsApi.getAll(isCentralOperationsUser ? undefined : getScopeId(hospitalProfile));
+    setClaims(response.data);
+  }, [hospitalProfile]);
+
   useEffect(() => {
     // Application initialized
   }, []);
@@ -1240,6 +1245,7 @@ const AppContent: React.FC = () => {
               ? authenticatedUser.permissions
               : [],
           }));
+          await hydratePersistedAvatar(authenticatedUser?.id);
 
           // Load database-owned insurance master data first. A failure in an
           // unrelated module (such as claim filtering) must not restore the
@@ -1371,88 +1377,42 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('claimnx:session-expired', handleExpiredSession);
   }, []);
 
-  // Auth Session State
+  // Auth state and identity are authoritative only when returned by the API.
   useEffect(() => {
-    // The local key identifies the last user only; a valid API session token
-    // is required before rendering the authenticated application shell.
-    if (localStorage.getItem('claimnx_manual_auth') && claimnxSessionService.getAccessToken()) {
-      setIsAuthenticated(true);
-    } else {
-      localStorage.removeItem('claimnx_manual_auth');
-      setIsAuthenticated(false);
-    }
-    setIsAuthReady(true);
-  }, []);
-
-  // Manual session recovery
-  useEffect(() => {
-    const manualEmail = localStorage.getItem('claimnx_manual_auth');
-    if (manualEmail && claimnxSessionService.getAccessToken()) {
-      if (hospitalUsers.length > 0) {
-        const matchedUser = hospitalUsers.find(u => u.username === manualEmail);
-        if (matchedUser) {
-          setHospitalProfile(matchedUser);
-        }
-      } else if (manualEmail === 'raulavhad@gmail.com') {
-         // Special case for primary admin if not in hospitalUsers seed yet
-         // though it should be.
-         setHospitalProfile({
-           id: 'primary-admin',
-           username: 'raulavhad@gmail.com',
-           displayName: 'Raul Avhad',
-           hospitalName: 'Apollo Hospitals',
-           role: 'Primary Admin',
-           hospitalId: 'H1',
-           isAdmin: true,
-           firebase_uid: 'bypassed-uid',
-           status: 'Active',
-           createdAt: new Date().toISOString(),
-           address: 'Bypassed Session',
-           rohiniId: '999999',
-           emailId: 'raulavhad@gmail.com',
-           mobileNo: '999999999',
-           doctorName: 'Dr. Rahul',
-           doctorMobileNo: '999999999',
-           walletBalance: 0,
-           perCaseCharge: 0,
-           portalCredentials: []
-         });
+    const restoreSession = async () => {
+      if (!claimnxSessionService.getAccessToken()) {
+        setIsAuthenticated(false);
+        setIsAuthReady(true);
+        return;
       }
-      setIsAuthReady(true);
-    }
-  }, [hospitalUsers.length]); // Re-run when hospitalUsers.length arrives but also on mount
-  useEffect(() => {
-    const rahulEmail = 'raulavhad@gmail.com';
-    
-    // Fix hospitalProfile if it's Rahul
-    if (hospitalProfile.username === rahulEmail || hospitalProfile.emailId === rahulEmail) {
-      if (hospitalProfile.displayName !== 'Rahul Avhad' || hospitalProfile.role !== 'Super Admin' || hospitalProfile.entityType !== 'User') {
-        setHospitalProfile(prev => ({
-          ...prev,
-          displayName: 'Rahul Avhad',
-          role: 'Super Admin',
-          emailId: rahulEmail,
-          entityType: 'User'
+      try {
+        const me: any = await authApi.getMe();
+        const profileData = me?.profileData ?? me?.profile_data ?? {};
+        setHospitalProfile((current) => ({
+          ...current,
+          ...profileData,
+          id: me.id,
+          username: me.email,
+          emailId: me.email,
+          displayName: me.display_name ?? profileData.displayName ?? me.email,
+          role: me.role,
+          roleId: me.roleId ?? me.role_id,
+          hospitalId: me.hospitalId ?? me.hospital_id,
+          mobileNo: me.mobile_no ?? profileData.mobileNo ?? '',
+          entityType: me.entity_type ?? profileData.entityType ?? 'User',
+          permissions: me.permissions ?? [],
         }));
+        await hydratePersistedAvatar(me.id);
+        setIsAuthenticated(true);
+      } catch {
+        claimnxSessionService.clear();
+        setIsAuthenticated(false);
+      } finally {
+        setIsAuthReady(true);
       }
-    }
-
-    // Fix hospitalUsers list using functional update to avoid loop
-    setHospitalUsers(prev => {
-      const needsFix = prev.some(u => 
-        (u.username === rahulEmail || u.emailId === rahulEmail) && 
-        (u.displayName !== 'Rahul Avhad' || u.role !== 'Super Admin' || u.entityType !== 'User')
-      );
-
-      if (!needsFix) return prev;
-
-      return prev.map(u => 
-        (u.username === rahulEmail || u.emailId === rahulEmail) 
-          ? { ...u, displayName: 'Rahul Avhad', role: 'Super Admin', emailId: rahulEmail, entityType: 'User' } 
-          : u
-      );
-    });
-  }, [hospitalProfile.username, hospitalProfile.emailId, hospitalProfile.displayName, hospitalProfile.role]);
+    };
+    void restoreSession();
+  }, []);
 
   const [showProfileModule, setShowProfileModule] = useState(false);
   const [profileInitialTab, setProfileInitialTab] = useState<'profile' | 'performance' | 'activity' | 'security' | 'notifications'>('profile');
@@ -1582,7 +1542,7 @@ const AppContent: React.FC = () => {
       toast.dismiss('offline-alert');
       if (wasOffline.current) {
         toast.success('Connection Restored', {
-          description: 'Synchronizing your offline updates with the server...',
+          description: 'You can continue working with ClaimNX.',
           duration: 5000,
           id: 'online-success',
           icon: <Globe2 size={18} className="text-emerald-500" />
@@ -1595,7 +1555,7 @@ const AppContent: React.FC = () => {
       setIsOnline(false);
       wasOffline.current = true;
       toast.error('Network Connection Lost', {
-        description: 'You are now working offline. Changes will be saved locally and updated automatically when you reconnect.',
+        description: 'Online actions are temporarily unavailable. Do not close the page; retry unsaved changes after your connection is restored.',
         duration: Infinity,
         id: 'offline-alert',
         icon: <Globe2 size={18} className="text-rose-500" />
@@ -1921,29 +1881,6 @@ const AppContent: React.FC = () => {
         role: String(sessionUser.role ?? current.role),
         status: 'Active',
       }));
-    } else if (username === 'raulavhad@gmail.com') {
-      const primaryAdmin: HospitalUser = {
-        id: 'primary-admin',
-        username: 'raulavhad@gmail.com',
-        displayName: 'Raul Avhad',
-        hospitalName: 'Apollo Hospitals',
-        role: 'Primary Admin',
-        hospitalId: 'H1',
-        isAdmin: true,
-        firebase_uid: 'bypassed-uid',
-        status: 'Active',
-        createdAt: new Date().toISOString(),
-        address: 'Bypassed Session',
-        rohiniId: '999999',
-        emailId: 'raulavhad@gmail.com',
-        mobileNo: '999999999',
-        doctorName: 'Dr. Rahul',
-        doctorMobileNo: '999999999',
-        walletBalance: 0,
-        perCaseCharge: 0,
-        portalCredentials: []
-      };
-      setHospitalProfile(primaryAdmin);
     }
     
     setIsAuthenticated(true); 
@@ -2304,32 +2241,6 @@ const AppContent: React.FC = () => {
     return currentUserPermissions.includes(`stage_permissions:stage_${stageKey}:update`);
   };
   
-  const getNextCaseId = (product: Product) => {
-    const prefixMap: { [key in Product]?: string } = {
-      [Product.CPC]: "CPC",
-      [Product.BG_DESK]: "DESK",
-      [Product.PARTNER_PROCESSING]: "PP",
-      [Product.ICA]: "HN",
-      [Product.PRE_POST]: "HN",
-      [Product.RECOVERY_RECONCILIATION]: "RNR",
-    };
-
-    const prefix = prefixMap[product] || "CLM";
-    
-    // Find all claims with this prefix and extract the numeric part
-    const relevantIds = claims
-      .map(c => c.id || "")
-      .filter(id => id.startsWith(`${prefix}-`))
-      .map(id => {
-        const parts = id.split("-");
-        const num = parseInt(parts[parts.length - 1]);
-        return isNaN(num) ? 0 : num;
-      });
-
-    const maxId = relevantIds.length > 0 ? Math.max(...relevantIds) : 100;
-    return `${prefix}-${maxId + 1}`;
-  };
-
   const handleCreateClaim = async (claim: Claim, options?: { preventNavigation?: boolean }) => {
     try {
       const isUuid = (value: unknown): value is string =>
@@ -2358,11 +2269,6 @@ const AppContent: React.FC = () => {
           console.warn("Could not delete previous draft claim from backend:", delErr);
         }
       }
-
-      // Point 1: Generate product-wise Case ID if it's a temporary ID
-      const finalId = (claim.id?.startsWith('CL-') || claim.id?.startsWith('CLM-') || !claim.id || isDraftFinalization)
-        ? getNextCaseId(claim.product || Product.CPC)
-        : claim.id;
 
       const getValidHospitalId = () => {
         const id = claim.hospitalId || claim.formData?.hospitalId || getScopeId(hospitalProfile);
@@ -2422,7 +2328,9 @@ const AppContent: React.FC = () => {
         hospital_id: resolvedHospitalId,
         patient_id: patientId,
         payer_id: payer.id,
-        case_ref_id: finalId,
+        // This required DTO field is intentionally ignored by the backend.
+        // The database transaction allocates the authoritative Case ID.
+        case_ref_id: 'SERVER_ASSIGNED',
         status: claim.status,
         amount: Number(claim.estimatedCost || 0),
         estimated_cost: Number(claim.estimatedCost || 0),
@@ -2455,8 +2363,8 @@ const AppContent: React.FC = () => {
       }
       const newClaim: Claim = {
         ...claim,
-        id: res.data?.id ?? finalId,
-        caseReferenceId: res.data?.claim_number ?? res.data?.case_ref_id ?? finalId,
+        id: res.data?.id,
+        caseReferenceId: res.data?.claim_number ?? res.data?.case_ref_id ?? 'Pending',
         claimNumber: res.data?.claim_number ?? '',
         patientId,
         hospitalId: persistedHospitalId,
@@ -2471,7 +2379,7 @@ const AppContent: React.FC = () => {
       // Ensure absolutely no duplicate claims in frontend state
       setClaims(prev => [
         newClaim,
-        ...prev.filter(c => c.id !== claim.id && c.id !== newClaim.id && c.id !== finalId)
+        ...prev.filter(c => c.id !== claim.id && c.id !== newClaim.id)
       ]);
       
       // Point 5: KYP Workflow Implementation
@@ -3019,7 +2927,7 @@ const AppContent: React.FC = () => {
                 }
                 setHospitalUsers((prev) => prev.map((u) => u.id === updatedHospital.id ? updatedHospital : u));
               }} insurers={insurers} tpas={tpas} currentUser={hospitalProfile} /> : <Navigate to="/" replace />} />
-              <Route path="/reconciliation-dashboard" element={canAccess('recon_dashboard') ? <ReconciliationDashboard claims={visibleClaims} hospitals={visibleHospitals} currentUser={hospitalProfile} users={hospitalUsers} onUpdateClaim={handleUpdateClaim} insurers={insurers} tpas={tpas} permissions={currentUserPermissions} /> : <Navigate to="/" replace />} />
+              <Route path="/reconciliation-dashboard" element={canAccess('recon_dashboard') ? <ReconciliationDashboard claims={visibleClaims} hospitals={visibleHospitals} currentUser={hospitalProfile} users={hospitalUsers} onUpdateClaim={handleUpdateClaim} onRefreshClaims={refreshReconciliationClaims} insurers={insurers} tpas={tpas} permissions={currentUserPermissions} /> : <Navigate to="/" replace />} />
               <Route path="/new-claim" element={
                   canAccess('nav_claims') || canAccess('edit_claims') 
                   ? <ClaimFormWizard 

@@ -16,6 +16,7 @@ export class MailAccountRepository {
       .select('*')
       .eq('hospital_id', hospitalId)
       .eq('is_deleted', false)
+      .eq('is_internal', false)
       .order('created_at', { ascending: false });
     if (error) throw error;
     return data ?? [];
@@ -28,6 +29,7 @@ export class MailAccountRepository {
       .select('*, hospitals(hospital_name, display_name)')
       .in('hospital_id', hospitalIds)
       .eq('is_deleted', false)
+      .eq('is_internal', false)
       .eq('status', 'ACTIVE')
       .order('email_address', { ascending: true });
     if (error) throw error;
@@ -39,10 +41,50 @@ export class MailAccountRepository {
       .from('mail_accounts')
       .select('*, hospitals(hospital_name, display_name)')
       .eq('is_deleted', false)
+      .eq('is_internal', false)
       .eq('status', 'ACTIVE')
       .order('email_address', { ascending: true });
     if (error) throw error;
     return data ?? [];
+  }
+
+  async findAllSyncable(): Promise<any[]> {
+    const { data, error } = await this.supabase
+      .from('mail_accounts')
+      .select('*')
+      .eq('is_deleted', false)
+      .eq('status', 'ACTIVE')
+      .eq('inbound_enabled', true)
+      .order('updated_at', { ascending: true });
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  async findActiveByProviderEmail(provider: string, emailAddress: string): Promise<any | null> {
+    const { data, error } = await this.supabase
+      .from('mail_accounts')
+      .select('*')
+      .eq('is_deleted', false)
+      .eq('status', 'ACTIVE')
+      .eq('provider', provider)
+      .ilike('email_address', emailAddress.trim())
+      .maybeSingle();
+    if (error) throw error;
+    return data;
+  }
+
+  async findActiveInternal(): Promise<any | null> {
+    const { data, error } = await this.supabase
+      .from('mail_accounts')
+      .select('*')
+      .eq('is_deleted', false)
+      .eq('is_internal', true)
+      .eq('status', 'ACTIVE')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return data;
   }
 
   async findById(id: string): Promise<any | null> {

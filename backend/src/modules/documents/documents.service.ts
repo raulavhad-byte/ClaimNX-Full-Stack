@@ -337,6 +337,7 @@ export class DocumentsService {
     documentId?: string;
     fileName?: string;
     category?: string;
+    uploadedAt?: string;
     actor: { id: string; hospitalId?: string | null; role?: string | null; permissions?: unknown; profileData?: unknown };
   }) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.claimId)) {
@@ -369,9 +370,7 @@ export class DocumentsService {
       this.normaliseFileName(document.file_name) === requestedName,
     );
     if (requestedName && nameMatches.length === 1) return nameMatches[0];
-    if (nameMatches.length > 1) {
-      throw new BadRequestException('More than one stored document matches this timeline entry.');
-    }
+    if (nameMatches.length > 1) return this.closestTimelineDocument(nameMatches, input.uploadedAt);
 
     // Historic workflow entries did not persist a document ID. Their display
     // label can differ from the uploaded file name, but the document category
@@ -385,9 +384,7 @@ export class DocumentsService {
         )
       : [];
     if (categoryMatches.length === 1) return categoryMatches[0];
-    if (categoryMatches.length > 1) {
-      throw new BadRequestException('More than one stored document matches this timeline category.');
-    }
+    if (categoryMatches.length > 1) return this.closestTimelineDocument(categoryMatches, input.uploadedAt);
 
     // A single stored document is unambiguous even if the legacy timeline
     // contains only a generic label. This is intentionally limited to one
@@ -403,6 +400,25 @@ export class DocumentsService {
       .toLocaleLowerCase()
       .replace(/\.[a-z0-9]{1,8}$/i, '')
       .replace(/[^a-z0-9]+/g, '');
+  }
+
+  /**
+   * Legacy timeline entries can predate stored document IDs.  When a file
+   * name/category was reused, select the registry record closest to the
+   * event's recorded upload time. The candidates have already been limited
+   * to the authenticated actor's claim, so this never crosses claim scope.
+   */
+  private closestTimelineDocument(documents: any[], uploadedAt?: string) {
+    const timelineTime = Date.parse(uploadedAt ?? '');
+    if (!Number.isFinite(timelineTime)) return documents[0];
+
+    return documents.reduce((closest, document) => {
+      const closestTime = Date.parse(closest.uploaded_at ?? closest.created_at ?? '') || 0;
+      const documentTime = Date.parse(document.uploaded_at ?? document.created_at ?? '') || 0;
+      return Math.abs(documentTime - timelineTime) < Math.abs(closestTime - timelineTime)
+        ? document
+        : closest;
+    });
   }
 
   private resolveMimeType(fileName: string, mimeType?: string) {
@@ -450,7 +466,10 @@ export class DocumentsService {
     return this.documentsRepository.update(id, dto);
   }
 
-  async remove(id: string) {
+  async remove(
+    id: string,
+    actor: { id: string; hospitalId?: string | null; role?: string | null; permissions?: unknown; profileData?: unknown },
+  ) {
     const document =
       await this.documentsRepository.findById(id);
 
@@ -459,6 +478,8 @@ export class DocumentsService {
         'Document not found',
       );
     }
+
+    await this.assertClaimAccess(document.claim_id, actor);
 
     await this.documentsRepository.delete(id);
 

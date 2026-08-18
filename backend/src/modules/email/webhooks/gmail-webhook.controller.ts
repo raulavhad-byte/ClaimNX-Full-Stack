@@ -1,11 +1,12 @@
 import { Controller, Post, Body, Headers, HttpCode, HttpStatus, Logger } from '@nestjs/common';
-import { EmailService } from '../email.service';
+import { MailboxSyncService } from '../jobs/mailbox-sync.service';
+import { GmailPushAuthenticator } from './gmail-push-authenticator.service';
 
 @Controller('webhooks/gmail')
 export class GmailWebhookController {
   private readonly logger = new Logger(GmailWebhookController.name);
 
-  constructor(private readonly emailService: EmailService) {}
+  constructor(private readonly mailboxSync: MailboxSyncService, private readonly authenticator: GmailPushAuthenticator) {}
 
   @Post('push')
   @HttpCode(HttpStatus.OK)
@@ -13,6 +14,7 @@ export class GmailWebhookController {
     @Body() body: any,
     @Headers('authorization') authHeader?: string
   ) {
+    await this.authenticator.validate(authHeader);
     this.logger.log(`Received Gmail Pub/Sub push notification: ${JSON.stringify(body?.message?.messageId || '')}`);
 
     // Decode PubSub base64 payload if present
@@ -28,6 +30,7 @@ export class GmailWebhookController {
       }
     }
 
+    if (emailAddress) await this.mailboxSync.requestProviderSync('GMAIL', emailAddress);
     return {
       received: true,
       emailAddress,

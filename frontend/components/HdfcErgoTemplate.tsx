@@ -14,7 +14,7 @@ const GridInput: React.FC<{ value: string; length: number; label?: string; subLa
       {label && <span className="text-[7px] font-black text-slate-800 uppercase mb-0.5 leading-none">{label}</span>}
       <div className="flex border-l border-t border-black w-fit bg-white">
         {chars.map((char, i) => (
-          <div key={i} className="w-[12px] h-[13px] border-r border-b border-black flex items-center justify-center text-[8.5px] font-black text-blue-700">
+<div key={i} className="w-[12px] h-[13px] shrink-0 border-r border-b border-black flex items-center justify-center text-[8.5px] font-black text-[#00338d]">
             {char === ' ' ? '' : char}
           </div>
         ))}
@@ -37,7 +37,7 @@ const DateGrid: React.FC<{ value: string; label?: string }> = ({ value, label })
       {label && <span className="text-[7px] font-black text-slate-800 uppercase mb-0.5">{label}</span>}
       <div className="flex">
         {sequence.map((char, i) => (
-          <div key={i} className={`w-[12px] h-[13px] border border-black flex items-center justify-center text-[8.5px] font-black text-blue-700 -ml-[1px] bg-white ${i === 1 || i === 3 ? 'mr-1.5' : ''}`}>
+<div key={i} className={`w-[12px] h-[13px] shrink-0 border border-black flex items-center justify-center text-[8.5px] font-black text-[#00338d] -ml-[1px] bg-white ${i === 1 || i === 3 ? 'mr-1.5' : ''}`}>
             {char}
           </div>
         ))}

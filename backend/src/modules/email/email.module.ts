@@ -31,6 +31,9 @@ import { AttachmentSecurityService } from './attachments/attachment-security.ser
 import { OutboundAttachmentStorageService } from './attachments/outbound-attachment-storage.service';
 import { EmailCorrespondenceRepository } from './email-correspondence.repository';
 import { InboundEmailService } from './inbound/inbound-email.service';
+import { MailboxSyncStateRepository } from './jobs/mailbox-sync-state.repository';
+import { MailboxSyncService } from './jobs/mailbox-sync.service';
+import { GmailPushAuthenticator } from './webhooks/gmail-push-authenticator.service';
 
 @Module({
   controllers: [EmailController],
@@ -58,6 +61,9 @@ import { InboundEmailService } from './inbound/inbound-email.service';
     OutboundAttachmentStorageService,
     EmailCorrespondenceRepository,
     InboundEmailService,
+    MailboxSyncStateRepository,
+    MailboxSyncService,
+    GmailPushAuthenticator,
   ],
   exports: [
     EmailService,
@@ -66,6 +72,7 @@ import { InboundEmailService } from './inbound/inbound-email.service';
     ClaimMatcherService,
     EmailDataExtractorService,
     InboundEmailService,
+    MailboxSyncService,
   ]
 })
 export class EmailModule {}

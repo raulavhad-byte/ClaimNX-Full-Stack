@@ -11,7 +11,7 @@ const GridBox: React.FC<{ value: string; length: number; label?: string; subLabe
       {label && <span className="text-[7px] font-bold text-slate-800 uppercase mb-0.5 leading-none">{label}</span>}
       <div className="flex border-l border-t border-black/40 bg-white shrink-0">
         {chars.map((char, i) => (
-          <div key={i} className="w-[10px] h-[12px] border-r border-b border-black/40 flex items-center justify-center text-[8px] font-black text-black">
+<div key={i} className="w-[10px] h-[12px] shrink-0 border-r border-b border-black/40 flex items-center justify-center text-[8px] font-black text-[#00338d]">
             {char === ' ' ? '' : char}
           </div>
         ))}
@@ -33,7 +33,7 @@ const DateGrid: React.FC<{ value: string; label?: string }> = ({ value, label })
       {label && <span className="text-[7px] font-bold text-slate-800 uppercase mb-0.5">{label}</span>}
       <div className="flex">
         {sequence.map((char, i) => (
-          <div key={i} className={`w-[10px] h-[12px] border border-black/60 flex items-center justify-center text-[8px] font-black bg-white ${i === 1 || i === 3 ? 'mr-1' : '-ml-[1px]'}`}>
+<div key={i} className={`w-[10px] h-[12px] shrink-0 border border-black/60 flex items-center justify-center text-[8px] font-black text-[#00338d] bg-white ${i === 1 || i === 3 ? 'mr-1' : '-ml-[1px]'}`}>
             {char}
           </div>
         ))}
@@ -57,13 +57,13 @@ const TimeGrid: React.FC<{ value: string; label?: string }> = ({ value, label })
       {label && <span className="text-[7px] font-bold text-slate-800 uppercase mb-0.5">{label}</span>}
       <div className="flex items-center space-x-0.5">
         <div className="flex border border-black/60 bg-white">
-           <div className="w-[10px] h-[12px] border-r border-black/40 flex items-center justify-center text-[8px] font-bold">{hChars[0]}</div>
-           <div className="w-[10px] h-[12px] flex items-center justify-center text-[8px] font-bold">{hChars[1]}</div>
+           <div className="w-[10px] h-[12px] shrink-0 border-r border-black/40 flex items-center justify-center text-[8px] font-bold text-[#00338d]">{hChars[0]}</div>
+           <div className="w-[10px] h-[12px] shrink-0 flex items-center justify-center text-[8px] font-bold text-[#00338d]">{hChars[1]}</div>
         </div>
         <span className="font-black text-[9px]">:</span>
         <div className="flex border border-black/60 bg-white">
-           <div className="w-[10px] h-[12px] border-r border-black/40 flex items-center justify-center text-[8px] font-bold">{mChars[0]}</div>
-           <div className="w-[10px] h-[12px] flex items-center justify-center text-[8px] font-bold">{mChars[1]}</div>
+           <div className="w-[10px] h-[12px] shrink-0 border-r border-black/40 flex items-center justify-center text-[8px] font-bold text-[#00338d]">{mChars[0]}</div>
+           <div className="w-[10px] h-[12px] shrink-0 flex items-center justify-center text-[8px] font-bold text-[#00338d]">{mChars[1]}</div>
         </div>
         <span className="text-[5px] font-bold text-slate-400 ml-1">H H : M M</span>
       </div>

@@ -9,7 +9,7 @@ const DashedLineField: React.FC<{ label: string; value: string; className?: stri
   <div className={`flex items-end mt-1 ${className}`}>
     <span className="text-[9px] font-bold text-black whitespace-nowrap mr-2 uppercase tracking-tight">{label}</span>
     <div className="flex-1 border-b border-dashed border-black/60 pb-0.5 flex items-end min-h-[14px]">
-      <span className={`text-[10px] uppercase truncate ${bold ? 'font-black text-black' : 'font-medium text-slate-700'}`}>{value}</span>
+    <span className={`text-[10px] uppercase truncate ${bold ? 'font-black text-[#00338d]' : 'font-medium text-[#00338d]'}`}>{value}</span>
     </div>
     {subLabel && <span className="text-[7.5px] font-bold text-slate-500 whitespace-nowrap ml-2">{subLabel}</span>}
   </div>

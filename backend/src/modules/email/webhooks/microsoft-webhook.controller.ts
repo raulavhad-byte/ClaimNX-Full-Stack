@@ -1,5 +1,5 @@
 import { Controller, Post, Get, Body, Query, Res, HttpStatus, Logger } from '@nestjs/common';
-import { Response } from 'express';
+import type { Response } from 'express';
 import { EmailService } from '../email.service';
 
 @Controller('webhooks/microsoft')
@@ -12,7 +12,6 @@ export class MicrosoftWebhookController {
   async handleGraphNotification(
     @Query('validationToken') validationToken: string,
     @Body() payload: any,
-    @Res() res: Response
     @Res() res: Response
   ) {
     // 1. Handle Microsoft Graph Webhook Handshake Validation

@@ -21,6 +21,7 @@ import { ClaimFilterDto } from './dto/claim-filter.dto';
 import { CrmDecisionDto } from './dto/crm-decision.dto';
 import { CrmCommentDto } from './dto/crm-comment.dto';
 import { MisReportQueryDto } from './dto/mis-report-query.dto';
+import { ClaimHistoryByMobileDto } from './dto/claim-history-by-mobile.dto';
 import { MisReportService } from './mis-report.service';
 import type { ClaimStageActor } from './claim-stage-permissions';
 
@@ -38,6 +39,14 @@ export class ClaimsController {
     @CurrentUser('id') actorUserId: string,
   ) {
     return this.claimsService.create(createClaimDto, actorUserId);
+  }
+
+  @Post('history/by-mobile')
+  findLatestByMobile(
+    @Body() input: ClaimHistoryByMobileDto,
+    @CurrentUser('id') actorUserId: string,
+  ) {
+    return this.claimsService.findLatestByMobile(input, actorUserId);
   }
 
   @Get()

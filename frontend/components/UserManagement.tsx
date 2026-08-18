@@ -244,6 +244,7 @@ const UserManagement: React.FC<UserManagementProps> = ({
   // File Refs
   const hospitalSealRef = useRef<HTMLInputElement>(null);
   const doctorStampRef = useRef<HTMLInputElement>(null);
+  const [pendingAssetFiles, setPendingAssetFiles] = useState<Partial<Record<"hospitalSeal" | "doctorStamp", File>>>({});
 
   const initialUserState = {
     // Hospital Details (Relevant for Partner Mode)
@@ -545,6 +546,7 @@ const UserManagement: React.FC<UserManagementProps> = ({
   const handleOpenAdd = () => {
     setEditingUserId(null);
     setFormState(initialUserState);
+    setPendingAssetFiles({});
     setError("");
     setActiveTab("profile");
     setIsViewMode(false);
@@ -561,6 +563,7 @@ const UserManagement: React.FC<UserManagementProps> = ({
 
   const handleEdit = (user: HospitalUser, viewOnly: boolean = false) => {
     setEditingUserId(user.id);
+    setPendingAssetFiles({});
     setIsViewMode(viewOnly);
     setIsCreatingNewBranch(false); // Edit is always direct
 
@@ -705,42 +708,19 @@ const UserManagement: React.FC<UserManagementProps> = ({
     }
   };
 
-  // Image resize utility
-  const resizeImage = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = (event) => {
-        const img = new Image();
-        img.src = event.target?.result as string;
-        img.onload = () => {
-          const canvas = document.createElement("canvas");
-          canvas.width = 100;
-          canvas.height = 100;
-          const ctx = canvas.getContext("2d");
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, 100, 100);
-            resolve(canvas.toDataURL(file.type));
-          } else {
-            reject("Canvas context not available");
-          }
-        };
-      };
-    });
-  };
-
   const handleFileUpload = async (
     field: "hospitalSeal" | "doctorStamp",
     e: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const file = e.target.files?.[0];
     if (file) {
-      try {
-        const resizedData = await resizeImage(file);
-        setFormState((prev) => ({ ...prev, [field]: resizedData }));
-      } catch (err) {
-        console.error("Image resize failed", err);
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+        toast.error('Only JPG, PNG, or WEBP images up to 5 MB are supported.');
+        e.target.value = '';
+        return;
       }
+      setPendingAssetFiles((current) => ({ ...current, [field]: file }));
+      setFormState((prev) => ({ ...prev, [field]: URL.createObjectURL(file) }));
     }
   };
 
@@ -1015,17 +995,39 @@ const UserManagement: React.FC<UserManagementProps> = ({
         (parentId ? "Centralized" : "Centralized")) as any,
     };
 
+    const uploadAssets = async (savedUser: HospitalUser) => {
+      const next = { ...savedUser };
+      const uploads: Array<Promise<void>> = [];
+      if (pendingAssetFiles.hospitalSeal) uploads.push((async () => {
+        const result: any = await usersApi.uploadProfileAsset(savedUser.id, 'hospital-seal', pendingAssetFiles.hospitalSeal!);
+        next.hospitalSeal = result.asset_url;
+        next.hospitalSealStoragePath = result.storage_path;
+      })());
+      if (pendingAssetFiles.doctorStamp) uploads.push((async () => {
+        const result: any = await usersApi.uploadProfileAsset(savedUser.id, 'doctor-stamp', pendingAssetFiles.doctorStamp!);
+        next.doctorStamp = result.asset_url;
+        next.doctorStampStoragePath = result.storage_path;
+      })());
+      try {
+        await Promise.all(uploads);
+      } catch (assetError) {
+        toast.error(assetError instanceof Error ? `Profile saved, but an asset upload failed: ${assetError.message}` : 'Profile saved, but an asset upload failed.');
+      }
+      setPendingAssetFiles({});
+      return next;
+    };
+
     const savePromise = (async () => {
       if (editingUserId) {
         const res = await usersApi.update(editingUserId, userPayload);
-        const updated = res.data;
+        const updated = await uploadAssets(res.data);
         setUsers(
           users.map((u) => (u.id === editingUserId ? { ...u, ...updated } : u)),
         );
         setShowAddForm(false);
       } else {
         const res = await usersApi.create(userPayload);
-        const created = res.data;
+        const created = await uploadAssets(res.data);
         const updatedUsers = [...users, created];
         setUsers(updatedUsers);
 

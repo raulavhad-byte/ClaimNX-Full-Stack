@@ -88,6 +88,7 @@ import MedsaveTemplate from "./MedsaveTemplate";
 import HealthIndiaTemplate from "./HealthIndiaTemplate";
 import VidalHealthTemplate from "./VidalHealthTemplate";
 import ClaimFormTemplate from "./ClaimFormTemplate";
+import OfficialPreauthTemplatePreview from "./OfficialPreauthTemplatePreview";
 import { FastDOBPicker } from "./FastDOBPicker";
 
 import { jsPDF } from "jspdf";
@@ -95,6 +96,8 @@ import html2canvas from "html2canvas";
 import { toast } from "sonner";
 import { isValidYearFormat, checkDateReasonability, formatDate, safeHtml2Canvas } from "../utils";
 import { claimsApi, documentsApi } from "../services/api";
+import { templateCanvasToPdf } from "../services/preauthPdf";
+import { createOfficialPreauthPdf, officialTemplateForName } from "../services/officialPreauthTemplate";
 
 interface ClaimFormWizardProps {
   fields: FormField[];
@@ -124,6 +127,34 @@ function base64ToFile(data: string, name: string, mimeType: string): File {
     values[index] = bytes.charCodeAt(index);
   }
   return new File([values], name, { type: mimeType || 'application/octet-stream' });
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x8000;
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+// The backend owns OCR parsing. Keep this UI allow-list so an OCR response can
+// only update recognised New Admission fields, never arbitrary client state.
+function admissionOcrUpdates(candidate: unknown): Record<string, string> {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return {};
+  const allowed = new Set([
+    "p_contact", "p_email", "p_uhid", "corporate_name", "p_employee_id", "p_relative_contact", "p_address",
+    "dr_name", "dr_contact", "m_illness", "m_clinical_findings", "m_duration", "m_first_cons_date",
+    "m_past_history", "m_prov_diag", "m_icd_code", "m_investigation_details", "m_surgery_name",
+    "m_icd_pcs_code", "m_treatment_type", "adm_type", "adm_date", "adm_exp_discharge", "adm_time",
+    "adm_stay_days", "adm_icu_days", "adm_room_type", "cost_room_rent", "cost_icu", "cost_ot",
+    "cost_investigation", "cost_prof_fees", "cost_medicines", "cost_other", "cost_package",
+  ]);
+  return Object.fromEntries(
+    Object.entries(candidate as Record<string, unknown>).filter(([key, value]) =>
+      allowed.has(key) && typeof value === "string" && value.trim().length > 0 && value !== "NA",
+    ),
+  ) as Record<string, string>;
 }
 
 // Helper to convert File to Base64
@@ -518,6 +549,57 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [emailError, setEmailError] = useState<string>("");
+  const [lastMobileHistoryLookup, setLastMobileHistoryLookup] = useState("");
+
+  // Patient-history lookup is intentionally server-side. A valid 10-digit
+  // mobile number is used only after the hospital context is known; the API
+  // applies the signed-in user's claim visibility rules before returning a
+  // limited prefill payload.
+  useEffect(() => {
+    const mobile = String(formData.p_contact ?? "").replace(/\D/g, "").slice(-10);
+    const hospitalId = selectedHospitalId || currentUser.hospitalId || "";
+    const hasValidHospitalId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(hospitalId);
+    const lookupKey = `${hospitalId}:${mobile}`;
+
+    if (!/^\d{10}$/.test(mobile) || !hasValidHospitalId || lookupKey === lastMobileHistoryLookup) {
+      return;
+    }
+
+    let cancelled = false;
+    const timeout = window.setTimeout(async () => {
+      try {
+        const result = await claimsApi.findLatestByMobile(mobile, hospitalId);
+        if (cancelled) return;
+
+        setLastMobileHistoryLookup(lookupKey);
+        if (!result?.found || !result.prefill || typeof result.prefill !== "object") return;
+
+        setFormData((previous) => ({
+          ...previous,
+          ...result.prefill,
+          p_contact: mobile,
+        }));
+        const reference = result.sourceClaim?.claimNumber;
+        toast.success(
+          reference
+            ? `Previous admission ${reference} found. Relevant details have been prefilled.`
+            : "Previous admission found. Relevant details have been prefilled.",
+        );
+      } catch (error) {
+        if (!cancelled) {
+          // Do not disclose lookup errors or data in the UI. The user can
+          // safely continue with a blank admission if history is unavailable.
+          console.warn("Patient history lookup was unavailable.", error);
+          setLastMobileHistoryLookup(lookupKey);
+        }
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [formData.p_contact, selectedHospitalId, currentUser.hospitalId, lastMobileHistoryLookup]);
 
   const renderActiveTemplate = (dataToUse = formData) => {
     const isStarHealth = activeTemplateName === "Star Health Standard";
@@ -542,8 +624,8 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
     const isHealthIndia = activeTemplateName === "HealthIndia Standard";
     const isVidalHealth = activeTemplateName === "Vidal Health Standard";
 
-    if (isStarHealth) return <StarHealthTemplate formData={dataToUse} />;
-    if (isTataAig) return <TataAigTemplate formData={dataToUse} />;
+    if (isStarHealth) return <OfficialPreauthTemplatePreview template="star-health" formData={dataToUse} />;
+    if (isTataAig) return <OfficialPreauthTemplatePreview template="tata-aig" formData={dataToUse} />;
     if (isHdfcErgo) return <HdfcErgoTemplate formData={dataToUse} />;
     if (isIciciLombard) return <IciciLombardTemplate formData={dataToUse} />;
     if (isCareHealth) return <CareHealthTemplate formData={dataToUse} />;
@@ -631,6 +713,7 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
 
       setFormData((prev) => ({
         ...prev,
+        ...admissionOcrUpdates(data.admissionForm),
         p_name: data.patientName && data.patientName !== "NA" ? data.patientName : prev.p_name,
         p_policy_no: data.policyNumber && data.policyNumber !== "NA" ? data.policyNumber : prev.p_policy_no,
         p_card_id: data.cardId && data.cardId !== "NA" ? data.cardId : prev.p_card_id,
@@ -754,6 +837,16 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
 
     setFormData((prev) => {
       const next = { ...prev, [key]: value };
+
+      // In-house processing is a direct insurer route. Keep the displayed and
+      // saved TPA value in lockstep when the insurer changes, rather than
+      // leaving the previous insurer as a stale TPA until a second action.
+      if (
+        (key === "insurance_company" && next.in_house_processing === "Yes") ||
+        (key === "in_house_processing" && value === "Yes")
+      ) {
+        next.tpa_provider = next.insurance_company;
+      }
 
       if (key === "p_dob" && value) {
         next.p_age_y = calculateAge(value);
@@ -906,6 +999,7 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
           setFormData((prev) => {
             const updates: any = {
               ...prev,
+              ...admissionOcrUpdates(data.admissionForm),
               p_name:
                 data.patientName && data.patientName !== "NA"
                   ? data.patientName
@@ -1192,6 +1286,20 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
     setIsGeneratingPdf(true);
     const toastId = toast.loading("Preparing high-quality PDF. Please wait...");
     try {
+      const officialTemplate = officialTemplateForName(activeTemplateName);
+      if (officialTemplate) {
+        const pdfBytes = await createOfficialPreauthPdf(officialTemplate, formData);
+        const blob = new Blob([pdfBytes], { type: "application/pdf" });
+        const href = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        const safePatientName = (generatedClaim?.patientName || formData.p_name || "Patient").replace(/\s+/g, "_");
+        link.href = href;
+        link.download = `PreAuth_Form_${safePatientName}_${activeTemplateName.replace(/\s+/g, "_")}.pdf`;
+        link.click();
+        URL.revokeObjectURL(href);
+        toast.success("Official PDF downloaded successfully!", { id: toastId });
+        return;
+      }
       const originalStyle = element.style.height;
       element.style.height = "auto";
 
@@ -1287,25 +1395,7 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
 
       element.style.height = originalStyle;
 
-      const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF("p", "mm", "a4");
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      const imgWidth = pdfWidth;
-      const imgHeight = (canvas.height * pdfWidth) / canvas.width;
-      
-      let heightLeft = imgHeight;
-      let position = 0;
-
-      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight, undefined, "FAST");
-      heightLeft -= pdfHeight;
-
-      while (heightLeft > 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight, undefined, "FAST");
-        heightLeft -= pdfHeight;
-      }
+      const pdf = templateCanvasToPdf(element, canvas);
 
       const safePatientName = (generatedClaim?.patientName || formData.p_name || "Patient").replace(/\s+/g, "_");
       const safeTemplateName = activeTemplateName.replace(/\s+/g, "_");
@@ -1451,7 +1541,10 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
   const handlePostSubmitChange = (key: string, value: any) => {
     const updatedFormData = { ...formData, [key]: value };
 
-    if (key === "in_house_processing" && value === "Yes") {
+    if (
+      (key === "insurance_company" && updatedFormData.in_house_processing === "Yes") ||
+      (key === "in_house_processing" && value === "Yes")
+    ) {
       updatedFormData.tpa_provider = updatedFormData.insurance_company;
     }
 
@@ -1459,7 +1552,11 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
 
     // Update generated claim object immediately so template can re-render
     if (generatedClaim) {
-      const updatedClaim = { ...generatedClaim, formData: updatedFormData };
+      const updatedClaim = {
+        ...generatedClaim,
+        insuranceProvider: updatedFormData.insurance_company,
+        formData: updatedFormData,
+      };
       setGeneratedClaim(updatedClaim);
 
       // Sync with App state (Patient Dashboard)
@@ -1528,7 +1625,10 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
     // Add generated Pre-Auth form (High-Quality PDF generated from the beautiful offscreen template)
     let pdfBase64 = "";
     const offscreenElement = document.getElementById("claim-template-offscreen");
-    if (offscreenElement) {
+    const officialTemplate = officialTemplateForName(activeTemplateName);
+    if (officialTemplate) {
+      pdfBase64 = bytesToBase64(await createOfficialPreauthPdf(officialTemplate, finalFormData));
+    } else if (offscreenElement) {
       try {
         const originalStyle = offscreenElement.style.height;
         offscreenElement.style.height = "auto";
@@ -1688,25 +1788,7 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
 
         offscreenElement.style.height = originalStyle;
 
-        const imgData = canvas.toDataURL("image/png");
-        const pdf = new jsPDF("p", "mm", "a4");
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = pdf.internal.pageSize.getHeight();
-        const imgWidth = pdfWidth;
-        const imgHeight = (canvas.height * pdfWidth) / canvas.width;
-        
-        let heightLeft = imgHeight;
-        let position = 0;
-
-        pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight, undefined, "FAST");
-        heightLeft -= pdfHeight;
-
-        while (heightLeft > 0) {
-          position = heightLeft - imgHeight;
-          pdf.addPage();
-          pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight, undefined, "FAST");
-          heightLeft -= pdfHeight;
-        }
+        const pdf = templateCanvasToPdf(offscreenElement, canvas);
 
         pdfBase64 = pdf.output('datauristring').split(',')[1];
       } catch (err) {
@@ -2360,7 +2442,7 @@ const ClaimFormWizard: React.FC<ClaimFormWizardProps> = ({
             </div>
           </div>
         </div>
-        <div id="claim-template-printable" className="bg-white print:block print:w-full print:h-full print:overflow-visible">
+        <div id="claim-template-printable" className="claim-template-preview bg-slate-100 overflow-x-auto print:block print:w-full print:h-full print:overflow-visible">
           {renderActiveTemplate(formData)}
         </div>
       </div>

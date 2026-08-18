@@ -1,13 +1,25 @@
 import path from 'path';
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
-export default defineConfig(() => {
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, __dirname, '');
+  const apiProxyTarget = env.VITE_CLAIMNX_API_PROXY_TARGET || 'http://localhost:3000';
+
   return {
     server: {
       port: 5173,
       host: '0.0.0.0',
+      // A LAN browser uses this same-origin path. Vite sends it to the API
+      // running on this computer, rather than the visitor's localhost.
+      proxy: {
+        '/api': {
+          target: apiProxyTarget,
+          changeOrigin: true,
+          rewrite: (requestPath) => requestPath.replace(/^\/api/, ''),
+        },
+      },
     },
     plugins: [
       react(),

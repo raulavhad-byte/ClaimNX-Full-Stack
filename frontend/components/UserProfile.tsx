@@ -11,6 +11,7 @@ import {
 import { auditService } from '../services/auditService';
 import { checkDateReasonability, isValidYearFormat } from '../utils';
 import { toast } from 'sonner';
+import { usersApi } from '../services/api';
 
 interface UserProfileProps {
   user: HospitalUser;
@@ -57,11 +58,26 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdate, claims, allUs
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [showPhotoMenu, setShowPhotoMenu] = useState(false);
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  useEffect(() => {
+    if (!user.id || !user.photoStoragePath) return;
+    let active = true;
+    usersApi.getAvatarUrl(user.id)
+      .then((result: any) => {
+        if (active && result?.avatar_url) {
+          setFormData((current) => ({ ...current, photoURL: result.avatar_url }));
+        }
+      })
+      .catch(() => {
+        if (active) setFormData((current) => ({ ...current, photoURL: '' }));
+      });
+    return () => { active = false; };
+  }, [user.id, user.photoStoragePath]);
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
       toast.error('Please select an image file (PNG, JPG, WEBP).');
       return;
     }
@@ -71,12 +87,16 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdate, claims, allUs
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64Url = reader.result as string;
-      const updatedUser = { ...formData, photoURL: base64Url };
+    setIsSaving(true);
+    try {
+      const result: any = await usersApi.uploadAvatar(user.id, file);
+      const updatedUser = {
+        ...formData,
+        photoURL: result.avatar_url,
+        photoStoragePath: result.storage_path,
+      };
       setFormData(updatedUser);
-      onUpdate(updatedUser);
+      await onUpdate(updatedUser);
       toast.success('Profile photo updated successfully!');
       setShowPhotoMenu(false);
 
@@ -88,27 +108,30 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdate, claims, allUs
         resourceId: user.id,
         details: 'User updated profile photo'
       });
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handlePhotoUrl = () => {
-    const url = prompt("Enter Image URL for profile photo:", formData.photoURL || "");
-    if (url !== null) {
-      const updatedUser = { ...formData, photoURL: url.trim() };
-      setFormData(updatedUser);
-      onUpdate(updatedUser);
-      toast.success(url.trim() ? 'Profile photo updated!' : 'Profile photo cleared.');
-      setShowPhotoMenu(false);
+    } catch (error) {
+      console.error('Unable to upload profile photo', error);
+      toast.error(error instanceof Error ? error.message : 'Unable to upload profile photo.');
+    } finally {
+      setIsSaving(false);
+      e.target.value = '';
     }
   };
 
-  const handleRemovePhoto = () => {
-    const updatedUser = { ...formData, photoURL: "" };
-    setFormData(updatedUser);
-    onUpdate(updatedUser);
-    toast.success('Profile photo removed.');
-    setShowPhotoMenu(false);
+  const handleRemovePhoto = async () => {
+    setIsSaving(true);
+    try {
+      await usersApi.deleteAvatar(user.id);
+      const updatedUser = { ...formData, photoURL: '', photoStoragePath: '' };
+      setFormData(updatedUser);
+      await onUpdate(updatedUser);
+      toast.success('Profile photo removed.');
+      setShowPhotoMenu(false);
+    } catch (error) {
+      console.error('Unable to remove profile photo', error);
+      toast.error(error instanceof Error ? error.message : 'Unable to remove profile photo.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   useEffect(() => {
@@ -230,12 +253,6 @@ const UserProfile: React.FC<UserProfileProps> = ({ user, onUpdate, claims, allUs
                       className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-blue-50 hover:text-blue-600 rounded-xl transition-colors text-left"
                     >
                       <Upload size={14} className="text-blue-500" /> Upload Photo
-                    </button>
-                    <button
-                      onClick={handlePhotoUrl}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-blue-50 hover:text-blue-600 rounded-xl transition-colors text-left"
-                    >
-                      <Link size={14} className="text-indigo-500" /> Enter Image URL
                     </button>
                     {formData.photoURL && (
                       <button

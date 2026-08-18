@@ -35,7 +35,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
       }
     }
 
-    // Supabase / PostgreSQL Errors
+    // Supabase / PostgreSQL errors may contain SQL details, record values, or
+    // identifiers. Map them to a safe public message and retain the original
+    // only in protected server-side observability tooling.
     else if (
       typeof exception === 'object' &&
       exception !== null &&
@@ -43,9 +45,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
     ) {
       const error: any = exception;
 
-      message = error.message;
+      message = 'Request could not be completed.';
 
-      switch (error.code) {
+      if (error.type === 'entity.too.large' || error.status === HttpStatus.PAYLOAD_TOO_LARGE) {
+        status = HttpStatus.PAYLOAD_TOO_LARGE;
+        message = 'Attachments are too large. The combined limit is 25 MB.';
+      } else switch (error.code) {
         case '23505':
           status = HttpStatus.CONFLICT;
           break;
@@ -67,6 +72,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       }
     }
 
+    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) message = 'An unexpected error occurred.';
     response.status(status).json({
       success: false,
       statusCode: status,

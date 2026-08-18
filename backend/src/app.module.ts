@@ -27,6 +27,10 @@ import { WorkflowModule } from './modules/workflow/workflow.module';
 import { FinancialModule } from './modules/financial/financial.module';
 import { AutomationModule } from './modules/automation/automation.module';
 import { EmailModule } from './modules/email/email.module';
+import { ReportAutomationModule } from './modules/report-automation/report-automation.module';
+import { OcrModule } from './modules/ocr/ocr.module';
+import { ReimbursementModule } from './modules/reimbursement/reimbursement.module';
+import { AiModule } from './modules/ai/ai.module';
 
 
 
@@ -57,7 +61,11 @@ import { EmailModule } from './modules/email/email.module';
   WorkflowModule,
   UsersModule,
   SharedModule,
-  EmailModule
+  EmailModule,
+  ReportAutomationModule,
+  OcrModule,
+  ReimbursementModule,
+  AiModule,
 ],
 })
 export class AppModule implements NestModule {

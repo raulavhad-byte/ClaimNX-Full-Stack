@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  InternalServerErrorException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -11,6 +12,7 @@ import { DatabaseService } from '../../database/database.service';
 import { CreateClaimDto } from './dto/create-claim.dto';
 import { UpdateClaimDto } from './dto/update-claim.dto';
 import { ClaimFilterDto } from './dto/claim-filter.dto';
+import { ClaimHistoryByMobileDto } from './dto/claim-history-by-mobile.dto';
 import { CrmDecisionDto } from './dto/crm-decision.dto';
 import { CrmCommentDto } from './dto/crm-comment.dto';
 import {
@@ -29,9 +31,23 @@ export class ClaimsService {
     return this.databaseService.getClient();
   }
 
+  /** In-house claims are handled directly by the selected insurer. Persisting
+   * a different TPA makes downstream routing and reports inconsistent. */
+  private normalizePayerRoute(formData: Record<string, any> | undefined) {
+    const normalized = { ...(formData ?? {}) };
+    if (normalized.in_house_processing === 'Yes') {
+      normalized.tpa_provider = normalized.insurance_company ?? '';
+    }
+    return normalized;
+  }
+
   async create(createClaimDto: CreateClaimDto, actorUserId: string) {
+    const normalizedCreateClaimDto = {
+      ...createClaimDto,
+      form_data: this.normalizePayerRoute(createClaimDto.form_data),
+    };
     const hospital = await this.requireHospitalContext(
-      createClaimDto.hospital_id,
+      normalizedCreateClaimDto.hospital_id,
       actorUserId,
     );
     const [productReferenceId, claimTypeReferenceId, lifecycleReferenceId] = await Promise.all([
@@ -43,20 +59,16 @@ export class ClaimsService {
       this.requireReferenceValue('CLAIM_LIFECYCLE_STATUS', 'DRAFT'),
     ]);
 
-    // Never trust a browser-generated case reference. Multiple hospitals and
-    // concurrent browser sessions can otherwise produce the same value (for
-    // example, "CPC-101"). The legacy case_ref_id is globally unique, while
-    // claim_number is a readable organization-scoped number when the database
-    // allocator is available.
+    // Never trust a browser-generated case reference. The database allocator
+    // is the single source of truth for a readable, globally serial Case ID.
     let lastError: any;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const caseReferenceId = `CASE-${randomUUID()}`;
       const claimNumber = await this.allocateClaimNumber(hospital.organization_id);
       const { data, error } = await this.supabase
         .from('claims')
         .insert({
-          ...createClaimDto,
-          case_ref_id: caseReferenceId,
+          ...normalizedCreateClaimDto,
+          case_ref_id: claimNumber,
           organization_id: hospital.organization_id,
           claim_number: claimNumber,
           claim_product_reference_value_id: productReferenceId,
@@ -90,11 +102,12 @@ export class ClaimsService {
       return data;
     }
 
-    // The UUID fallback keeps production claim creation collision-proof even
-    // during a rolling deployment where an older database has not yet received
-    // the allocator migration. It is also safe for any future tenant count.
-    console.warn('Claim number allocator unavailable; using UUID fallback.', error?.message);
-    return `CLM-${randomUUID()}`;
+    // A random/dummy ID is worse than a failed create: it breaks serial case
+    // tracking, audit trails and reconciliation. The migration must be live
+    // before claims can be created.
+    throw new InternalServerErrorException(
+      `Case ID allocator is unavailable. Apply the ClaimNX database migrations before creating claims.${error?.message ? ` ${error.message}` : ''}`,
+    );
   }
 
   private async requireHospitalContext(
@@ -296,6 +309,93 @@ export class ClaimsService {
     }));
   }
 
+  /**
+   * Finds the most recent visible claim for a mobile number and returns only
+   * fields that can safely prefill a new admission. The search is deliberately
+   * scoped through claims_visible_to_user: the browser cannot use this endpoint
+   * to probe records from another hospital or its broader organisation.
+   */
+  async findLatestByMobile(
+    input: ClaimHistoryByMobileDto,
+    actorUserId: string,
+  ) {
+    const mobile = this.normaliseMobile(input.mobile);
+    const visibleClaims = await this.findAll({ hospital_id: input.hospital_id }, actorUserId);
+    const matchedClaims = visibleClaims.filter((claim: any) => {
+      const formData = claim.form_data ?? claim.formData ?? {};
+      const storedMobile = formData.p_contact ?? formData.mobile ?? formData.patient_mobile;
+      return this.normaliseMobile(storedMobile) === mobile;
+    });
+
+    const latest = matchedClaims.sort((left: any, right: any) =>
+      String(right.updated_at ?? right.created_at ?? '').localeCompare(
+        String(left.updated_at ?? left.created_at ?? ''),
+      ),
+    )[0];
+
+    if (!latest) return { found: false, prefill: {} };
+
+    const formData = latest.form_data ?? latest.formData ?? {};
+    return {
+      found: true,
+      sourceClaim: {
+        // This lets the UI explain that a previous admission was found without
+        // exposing history, documents, financial details, or raw OCR output.
+        claimNumber: latest.claim_number ?? latest.claimNumber ?? null,
+        updatedAt: latest.updated_at ?? latest.created_at ?? null,
+      },
+      prefill: this.claimHistoryPrefill(formData, mobile),
+    };
+  }
+
+  private normaliseMobile(value: unknown): string {
+    return String(value ?? '').replace(/\D/g, '').slice(-10);
+  }
+
+  private claimHistoryPrefill(
+    formData: Record<string, unknown>,
+    mobile: string,
+  ): Record<string, unknown> {
+    // Keep this list explicit. New Admission may reuse patient, clinical and
+    // admission data, but it must not inherit workflow state, financial data,
+    // documents, approvals, audit events, or hospital/operator credentials.
+    const permittedFields = [
+      // Step 1: patient, policy and contact data
+      'insurance_company', 'tpa_provider', 'in_house_processing',
+      'p_contact', 'p_email', 'p_uhid', 'p_name', 'p_gender', 'p_dob',
+      'p_age_y', 'p_policy_no', 'corporate_name', 'p_card_id',
+      'p_employee_id', 'p_relative_contact', 'p_address',
+      'p_family_physician', 'p_family_physician_name',
+      'p_family_physician_contact', 'p_other_insurance',
+      'p_other_insurer_name', 'p_other_insurance_details',
+      'p_sum_insured', 'p_room_eligibility', 'p_icu_eligibility',
+      'p_copay', 'p_sub_limit', 'p_bonus', 'p_ncb',
+      // Step 2: clinical information
+      'dr_name', 'dr_contact', 'm_illness', 'm_clinical_findings',
+      'm_duration', 'm_first_cons_date', 'm_past_history', 'm_prov_diag',
+      'm_icd_code', 'm_investigation_details', 'm_surgery_name',
+      'm_icd_pcs_code', 'm_treatment_type', 'm_chronic_history',
+      'm_is_maternity', 'm_is_rta', 'm_rta_police', 'm_abuse_alcohol',
+      'm_test_conducted', 'm_route_drug',
+      // Step 3: current-admission estimate fields (staff must review dates)
+      'adm_type', 'adm_room_type', 'adm_stay_days', 'adm_icu_days',
+      'cost_room_rent', 'cost_icu', 'cost_ot', 'cost_investigation',
+      'cost_prof_fees', 'cost_medicines', 'cost_other', 'cost_package',
+    ];
+
+    const prefill = permittedFields.reduce<Record<string, unknown>>((result, field) => {
+      const value = formData[field];
+      if (value !== undefined && value !== null && String(value).trim() !== '') {
+        result[field] = value;
+      }
+      return result;
+    }, {});
+
+    // The number entered by the user is canonical for this lookup.
+    prefill.p_contact = mobile;
+    return prefill;
+  }
+
   async findOne(id: string, actorUserId?: string) {
     const { data, error } = await this.supabase
       .from('claims')
@@ -341,10 +441,24 @@ export class ClaimsService {
       updateClaimDto.form_data,
     );
 
+    // Merge before normalizing so a partial PATCH that changes only the
+    // insurer still updates the direct-route TPA in the same database write.
+    const normalizedUpdateClaimDto = {
+      ...updateClaimDto,
+      ...(updateClaimDto.form_data
+        ? {
+            form_data: this.normalizePayerRoute({
+              ...(currentClaim.form_data ?? {}),
+              ...updateClaimDto.form_data,
+            }),
+          }
+        : {}),
+    };
+
     const { data, error } = await this.supabase
       .from('claims')
       .update({
-        ...updateClaimDto,
+        ...normalizedUpdateClaimDto,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)

@@ -73,7 +73,8 @@ import {
   Link2,
   Paperclip,
   PenTool,
-  Inbox
+  Inbox,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
@@ -85,6 +86,7 @@ interface ReconciliationDashboardProps {
   currentUser: HospitalUser;
   users: HospitalUser[];
   onUpdateClaim: (claim: Claim) => void;
+  onRefreshClaims: () => Promise<void>;
   insurers?: InsuranceEntity[];
   tpas?: InsuranceEntity[];
   permissions?: string[];
@@ -140,6 +142,7 @@ const ReconciliationDashboard: React.FC<ReconciliationDashboardProps> = ({
   currentUser,
   users,
   onUpdateClaim,
+  onRefreshClaims,
   insurers = [],
   tpas = [],
   permissions = []
@@ -167,6 +170,7 @@ const ReconciliationDashboard: React.FC<ReconciliationDashboardProps> = ({
   const [selectedTpas, setSelectedTpas] = useState<string[]>([]);
   const [showSettlementModal, setShowSettlementModal] = useState<Claim | null>(null);
   const [showBulkEmailModal, setShowBulkEmailModal] = useState(false);
+  const [isSendingBulkFollowUp, setIsSendingBulkFollowUp] = useState(false);
   const [selectedClaims, setSelectedClaims] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'Dashboard' | 'Initiate Settlement' | 'Emails' | 'Performance' | 'Automation'>('Dashboard');
   const [showPatientModal, setShowPatientModal] = useState<Claim | null>(null);
@@ -198,6 +202,21 @@ const ReconciliationDashboard: React.FC<ReconciliationDashboardProps> = ({
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
+
+  const handleRefresh = async (showFeedback = true) => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await onRefreshClaims();
+      setLastRefreshed(new Date());
+      if (showFeedback) toast.success('Finance dashboard and Initiate Settlement have been refreshed.');
+    } catch (error) {
+      console.error('Reconciliation refresh failed', error);
+      if (showFeedback) toast.error('Unable to refresh reconciliation data. Please try again.');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualRequest, setManualRequest] = useState({ 
     hospitalId: '', 
@@ -267,18 +286,25 @@ const ReconciliationDashboard: React.FC<ReconciliationDashboardProps> = ({
   const [showAllPriorityModal, setShowAllPriorityModal] = useState(false);
   const [confirmActionClaim, setConfirmActionClaim] = useState<Claim | null>(null);
 
-  const getOutstandingAmt = (c: any) => {
-    const isSettled = c.status === ClaimStatus.COMPLETE_SETTLEMENT || c.status === ClaimStatus.SETTLED || c.settlementStatus === 'Full';
-    if (isSettled) return 0;
-    return Number(c.outstandingAmount ?? c.formData?.fin_app_amt ?? 0);
-  };
+  const settlementStatuses = new Set<string>([
+    ClaimStatus.PARTIAL_SETTLEMENT_RECOVERABLE,
+    ClaimStatus.PARTIAL_SETTLEMENT_NON_RECOVERABLE,
+    ClaimStatus.COMPLETE_SETTLEMENT,
+    ClaimStatus.ACCOUNT_RECONCILIATION,
+    ClaimStatus.BANK_RECONCILIATION_COMPLETED,
+    ClaimStatus.SETTLED,
+  ]);
 
   const isSettlementClaim = (claim: Claim) =>
-    claim.status === ClaimStatus.COMPLETE_SETTLEMENT ||
-    claim.status === ClaimStatus.PARTIAL_SETTLEMENT_RECOVERABLE ||
-    claim.status === ClaimStatus.PARTIAL_SETTLEMENT_NON_RECOVERABLE ||
-    claim.status === ClaimStatus.SETTLED ||
+    settlementStatuses.has(String(claim.status)) ||
+    ['PARTIAL_SETTLEMENT_RECOVERABLE', 'PARTIAL_SETTLEMENT_NON_RECOVERABLE', 'COMPLETE_SETTLEMENT', 'ACCOUNT_RECONCILIATION', 'BANK_RECONCILIATION_COMPLETED']
+      .includes(String(claim.status).trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '')) ||
     claim.settlementStatus === 'Full';
+
+  const getOutstandingAmt = (c: any) => {
+    if (isSettlementClaim(c)) return 0;
+    return Number(c.outstandingAmount ?? c.formData?.fin_app_amt ?? 0);
+  };
 
   const parseAmount = (value: unknown): number => {
     if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
@@ -344,6 +370,7 @@ const ReconciliationDashboard: React.FC<ReconciliationDashboardProps> = ({
   const [selectedEmailHospital, setSelectedEmailHospital] = useState<string>('All');
   const [activeMailboxes, setActiveMailboxes] = useState<any[]>([]);
   const [financeHospitals, setFinanceHospitals] = useState<any[]>([]);
+  const [emailFolderCounts, setEmailFolderCounts] = useState<Record<string, number>>({ INBOX: 0, SENT: 0, DRAFTS: 0, OUTBOX: 0, SPAM: 0 });
   const [emailDraftData, setEmailDraftData] = useState({
     id: '',
     hospitalId: '',
@@ -365,18 +392,19 @@ const ReconciliationDashboard: React.FC<ReconciliationDashboardProps> = ({
         hospitalName: String(hospital?.hospitalName ?? hospital?.displayName ?? hospital?.name ?? hospital?.hospital_name ?? id),
       });
     };
-    hospitals.forEach(add);
-    financeHospitals.forEach(add);
-    claims.forEach((claim: any) => add({
-      id: claimHospitalId(claim),
-      hospitalName: claimHospitalName(claim),
-    }));
+    // Finance mail is available only for hospitals with an active mailbox.
+    // Legacy/local lists can carry the same hospital under different IDs.
     activeMailboxes.forEach((mailbox) => add({
       id: mailbox.hospital_id,
       hospitalName: mailbox.hospitals?.hospital_name || mailbox.hospitals?.display_name || mailbox.hospital_name,
     }));
-    return [...options.values()].sort((left, right) => left.hospitalName.localeCompare(right.hospitalName));
-  }, [activeMailboxes, claims, financeHospitals, hospitals]);
+    const names = new Map<string, { id: string; hospitalName: string }>();
+    for (const option of options.values()) {
+      const key = option.hospitalName.trim().toLocaleLowerCase();
+      if (!names.has(key)) names.set(key, option);
+    }
+    return [...names.values()].sort((left, right) => left.hospitalName.localeCompare(right.hospitalName));
+  }, [activeMailboxes]);
   const emailHospitalIdsKey = emailHospitalOptions.map((hospital) => hospital.id).join(',');
 
   const getActiveMailboxForHospital = (hospitalId: string) => {
@@ -515,8 +543,11 @@ Reconciliation Team
       insurerBehavior: 15
     }
   });
-  const [currentEmailFolder, setCurrentEmailFolder] = useState<'Inbox' | 'Sent' | 'Draft' | 'Outbox'>('Inbox');
+  const [currentEmailFolder, setCurrentEmailFolder] = useState<'Inbox' | 'Sent' | 'Draft' | 'Outbox' | 'Spam'>('Inbox');
   const [emailsDb, setEmailsDb] = useState<any[]>([]);
+  const [isEmailSyncing, setIsEmailSyncing] = useState(false);
+  const [emailSyncError, setEmailSyncError] = useState<string | null>(null);
+  const [emailRefreshNonce, setEmailRefreshNonce] = useState(0);
 
   const loadEmailsFromStorage = () => {
     try {
@@ -635,21 +666,46 @@ CRM Operations`,
   };
 
   useEffect(() => {
-    setEmailsDb(loadEmailsFromStorage());
-
-    const handleStorageChange = () => {
+    const folder = { Inbox: 'INBOX', Sent: 'SENT', Draft: 'DRAFTS', Outbox: 'OUTBOX', Spam: 'SPAM' }[currentEmailFolder];
+    const query = new URLSearchParams({ folder });
+    if (selectedEmailHospital !== 'All') query.set('hospitalId', selectedEmailHospital);
+    let cancelled = false;
+    const loadLiveMail = async () => {
+      setIsEmailSyncing(true);
       try {
-        const stored = localStorage.getItem('claimnx_emails');
-        if (stored) {
-          setEmailsDb(JSON.parse(stored));
-        }
-      } catch (e) {
-        console.error(e);
+        const [messages, counts] = await Promise.all([
+          claimnxApi.get(`/email/messages?${query.toString()}`),
+          claimnxApi.get(`/email/folder-counts${selectedEmailHospital === 'All' ? '' : `?hospitalId=${encodeURIComponent(selectedEmailHospital)}`}`),
+        ]);
+        if (cancelled) return;
+        setEmailSyncError(null);
+        setEmailFolderCounts(counts || {});
+        setEmailsDb((messages || []).map((message: any) => ({
+          id: message.id, claimId: message.claims?.claim_number || message.claims?.case_ref_id || 'N/A',
+          sentDate: message.received_at || message.sent_at || new Date().toISOString(), sender: message.from_address || '',
+          recipient: (message.to_addresses || []).map((item: any) => item.address || item).join(', '),
+          recipientType: message.direction === 'INBOUND' ? 'Sender' : 'Recipient', subject: message.subject || '(No subject)',
+          body: message.plain_text_body || '', status: message.processing_status || message.folder, templateUsed: message.folder,
+          hospitalId: message.mail_accounts?.hospital_id,
+          attachments: (message.email_attachments || []).map((attachment: any) => ({
+            attachmentId: attachment.id,
+            name: attachment.file_name,
+            mimeType: attachment.mime_type,
+            sizeBytes: attachment.size_bytes,
+          })),
+        })));
+      } catch (error) {
+        // Do not replace previously loaded correspondence with an empty list
+        // during a transient provider/API failure.
+        if (!cancelled) setEmailSyncError('Email sync is temporarily unavailable. Please try again.');
+      } finally {
+        if (!cancelled) setIsEmailSyncing(false);
       }
     };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
+    void loadLiveMail();
+    const interval = window.setInterval(loadLiveMail, 60000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [currentEmailFolder, selectedEmailHospital, emailRefreshNonce]);
 
   const reminderLogs = useMemo<ReminderLog[]>(() => {
     return emailsDb.map(email => ({
@@ -697,14 +753,6 @@ CRM Operations`,
 
   const filteredEmails = useMemo(() => {
     return emailsDb.filter(log => {
-      let matchesFolder = false;
-      if (currentEmailFolder === 'Inbox') matchesFolder = log.status === 'Received';
-      else if (currentEmailFolder === 'Sent') matchesFolder = log.status === 'Sent' || log.status === 'Responded';
-      else if (currentEmailFolder === 'Draft') matchesFolder = log.status === 'Draft';
-      else if (currentEmailFolder === 'Outbox') matchesFolder = log.status === 'Queued';
-
-      if (!matchesFolder) return false;
-
       const query = searchQuery.toLowerCase();
       const matchesSearch = 
         (log.claimId || '').toLowerCase().includes(query) ||
@@ -715,10 +763,9 @@ CRM Operations`,
       
       if (!matchesSearch) return false;
 
-      if (selectedEmailHospital === 'All') return true;
-      return log.hospitalId === selectedEmailHospital;
+      return true;
     });
-  }, [emailsDb, currentEmailFolder, searchQuery, selectedEmailHospital]);
+  }, [emailsDb, searchQuery]);
 
   // Auto Refresh Logic
   useEffect(() => {
@@ -730,16 +777,11 @@ CRM Operations`,
     }
 
     const interval = setInterval(() => {
-      setIsRefreshing(true);
-      // Simulate fetching new data in background (in a real app, this would be an API call)
-      setTimeout(() => {
-        setLastRefreshed(new Date());
-        setIsRefreshing(false);
-      }, 1000);
-    }, 45000); // 45 seconds
+      void handleRefresh(false);
+    }, 45000);
 
     return () => clearInterval(interval);
-  }, [showSettlementModal, showBulkEmailModal, showPatientModal]);
+  }, [showSettlementModal, showBulkEmailModal, showPatientModal, onRefreshClaims]);
 
   const runAutoScheduler = () => {
     const now = new Date();
@@ -947,8 +989,8 @@ CRM Operations`,
   const stats = useMemo(() => {
     const totalOutstanding = claimsWithAging.reduce((acc, c) => acc + getOutstandingAmt(c), 0);
     const pendingCases = pendingAgingClaims.length;
-    const highAgingCases = claimsWithAging.filter(c => c.agingDays > 90).length;
-    const fileDispatchedCases = claimsWithAging.filter(c => c.agingBucket === 'File Dispatched').length;
+    const highAgingCases = pendingAgingClaims.filter(c => c.agingDays > 90).length;
+    const fileDispatchedCases = pendingAgingClaims.filter(c => c.agingBucket === 'File Dispatched').length;
     
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -1061,6 +1103,25 @@ CRM Operations`,
       pendingAmount: recovery(assignedPending),
     };
   }, [currentUser, settlementClaims, pendingAgingClaims]);
+
+  const livePerformance = useMemo(() => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const days = Array.from({ length: 7 }, (_, index) => { const date = new Date(today); date.setDate(today.getDate() - (6 - index)); return { date, label: format(date, 'EEE'), amount: 0 }; });
+    const performers = new Map<string, { name: string; amount: number; count: number }>();
+    settlementClaims.forEach((claim) => {
+      const date = new Date(claim.formData?.settlement_date || claim.updatedAt);
+      const amount = parseAmount(claim.paidAmount ?? claim.formData?.set_incl_tds ?? claim.formData?.fin_app_amt);
+      if (!Number.isFinite(date.getTime()) || amount <= 0) return;
+      const index = Math.floor((date.getTime() - today.getTime()) / 86_400_000) + 6;
+      if (index >= 0 && index < 7) days[index].amount += amount;
+      const id = String(claim.assignedReconUserId || claim.updatedBy || 'unassigned');
+      const user = users.find((candidate) => candidate.id === id);
+      const entry = performers.get(id) || { name: user?.displayName || user?.displayNameFull || (id === 'unassigned' ? 'Unassigned' : 'Finance User'), amount: 0, count: 0 };
+      entry.amount += amount; entry.count += 1; performers.set(id, entry);
+    });
+    const ranked = [...performers.values()].sort((a, b) => b.amount - a.amount).slice(0, 5);
+    return { days, maxTrend: Math.max(1, ...days.map((item) => item.amount)), ranked, maxPerformer: Math.max(1, ...ranked.map((item) => item.amount)) };
+  }, [settlementClaims, users]);
 
   // Aging Buckets Data
   const bucketData = useMemo(() => {
@@ -1400,15 +1461,21 @@ CRM Operations`,
     XLSX.writeFile(workbook, `Reconciliation_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
-  const handleBulkEmail = () => {
-    const selectedData = claimsWithAging.filter(c => selectedClaims.includes(c.id));
+  const handleBulkEmail = (claimsOverride?: Claim[], recipientTypeOverride?: 'Insurer' | 'TPA' | 'Hospital') => {
+    const selectedData = claimsOverride ?? claimsWithAging.filter(c => selectedClaims.includes(c.id));
     if (selectedData.length === 0) return;
+    const recipientType = recipientTypeOverride ?? emailData.recipientType;
+    const hospitalIds = [...new Set(selectedData.map(claimHospitalId).filter(Boolean))];
+    if (hospitalIds.length !== 1 || !getActiveMailboxForHospital(hospitalIds[0])) {
+      toast.error('Follow-ups require one hospital with an active outbound mailbox.');
+      return;
+    }
 
     let recipientEmail = '';
-    if (emailData.recipientType === 'Insurer') {
+    if (recipientType === 'Insurer') {
       const insurer = insurers.find(i => i.name === selectedData[0].insuranceProvider);
       recipientEmail = insurer?.emailId || '';
-    } else if (emailData.recipientType === 'TPA') {
+    } else if (recipientType === 'TPA') {
       const tpa = tpas.find(t => t.name === selectedData[0].formData?.tpa_provider);
       recipientEmail = tpa?.emailId || '';
     } else if (emailData.recipientType === 'Hospital') {
@@ -1419,24 +1486,12 @@ CRM Operations`,
     const subject = `Follow-up: Outstanding Claims - ${selectedData.length} Cases`;
     const body = `Dear ${emailData.recipientType} Team,\n\nPlease find the list of outstanding claims for reconciliation:\n\n` +
       selectedData.map(c => {
-        return `- Claim: ${c.id}, Patient: ${c.patientName}, Outstanding: ₹${(c.outstandingAmount || c.formData?.fin_app_amt || 0).toLocaleString()}, Aging: ${c.agingDays} days`;
+        return `- Claim No: ${claimBusinessNumber(c)}, Patient: ${c.patientName}, Outstanding: ₹${(c.outstandingAmount || c.formData?.fin_app_amt || 0).toLocaleString()}, Aging: ${c.agingDays} days`;
       }).join('\n') +
       `\n\nTotal Outstanding: ₹${selectedData.reduce((acc, c) => acc + (c.outstandingAmount || c.formData?.fin_app_amt || 0), 0).toLocaleString()}\n\nRegards,\nReconciliation Team\nClaimNX Portal`;
     
-    setEmailData(prev => ({ ...prev, to: recipientEmail, subject, body }));
+    setEmailData(prev => ({ ...prev, recipientType, to: recipientEmail, subject, body }));
     setShowBulkEmailModal(true);
-
-    // Simulated log entry
-    const newLog: ReminderLog = {
-      id: `log-${Date.now()}`,
-      claimId: selectedData.length === 1 ? selectedData[0].id : 'Multiple',
-      sentDate: new Date().toISOString(),
-      recipient: recipientEmail,
-      recipientType: emailData.recipientType,
-      status: 'Sent',
-      templateUsed: 'Standard Follow-up'
-    };
-    setReminderLogs(prev => [newLog, ...prev]);
   };
 
   // Update email when recipient type changes
@@ -1460,7 +1515,7 @@ CRM Operations`,
         const subject = `Follow-up: Outstanding Claims - ${selectedData.length} Cases`;
         const body = `Dear ${emailData.recipientType} Team,\n\nPlease find the list of outstanding claims for reconciliation:\n\n` +
           selectedData.map(c => {
-            return `- Claim: ${c.id}, Patient: ${c.patientName}, Outstanding: ₹${(c.outstandingAmount || 0).toLocaleString()}, Aging: ${c.agingDays} days`;
+            return `- Claim No: ${claimBusinessNumber(c)}, Patient: ${c.patientName}, Outstanding: ₹${(c.outstandingAmount || 0).toLocaleString()}, Aging: ${c.agingDays} days`;
           }).join('\n') +
           `\n\nTotal Outstanding: ₹${selectedData.reduce((acc, c) => acc + (c.outstandingAmount || 0), 0).toLocaleString()}\n\nRegards,\nReconciliation Team\nClaimNX Portal`;
           
@@ -1568,6 +1623,16 @@ CRM Operations`,
             <p className="text-[#141414]/60 text-xs font-bold uppercase tracking-[0.2em]">Post-Dispatch Claim Recovery & Aging Management</p>
           </div>
           <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => void handleRefresh()}
+              disabled={isRefreshing}
+              className="px-6 py-3 bg-white border border-[#000080]/20 text-[#000080] rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm hover:bg-blue-50 transition-all active:scale-95 disabled:cursor-wait disabled:opacity-60 flex items-center"
+              title="Refresh Finance Dashboard and Initiate Settlement"
+            >
+              <RefreshCw size={16} className={`mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+              {isRefreshing ? 'Refreshing' : 'Refresh'}
+            </button>
             <button 
               onClick={() => setShowDownloadModal(true)}
               className="px-6 py-3 bg-[#000080] text-[#E4E3E0] rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg hover:bg-blue-900 transition-all active:scale-95 flex items-center"
@@ -2019,8 +2084,7 @@ CRM Operations`,
                         <button 
                           onClick={() => {
                             setSelectedClaims([claim.id]);
-                            setEmailData(prev => ({ ...prev, recipientType: 'Hospital' }));
-                            handleBulkEmail();
+                            handleBulkEmail([claim], claim.formData?.tpa_provider && claim.formData.tpa_provider !== 'None' ? 'TPA' : 'Insurer');
                           }}
                           className="p-2 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"
                           title="Remind Hospital"
@@ -2699,30 +2763,18 @@ CRM Operations`,
                               <td className="p-4 text-right">
                                 <div className="flex items-center justify-end gap-2">
                                   <button
-                                    onClick={() => setSelectedFailedClaim(claim)}
-                                    className="px-3 py-1.5 rounded-xl border border-slate-300 hover:border-slate-800 text-[10px] font-bold text-slate-700 transition-all bg-white hover:bg-slate-50 cursor-pointer select-none"
-                                    title="Open interactive manual action panel"
-                                  >
-                                    Open Settlement Panel
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      toast.success(`Dossier compiled successfully.`, {
-                                        description: "Downloaded file: Settlement_Manual_Pack.zip"
-                                      });
-                                    }}
-                                    className="px-3 py-1.5 rounded-xl bg-[#141414]/5 hover:bg-[#141414]/10 text-[10px] font-bold text-[#141414] transition-all flex items-center gap-1 cursor-pointer select-none"
-                                    title="Download ZIP dossier with all claim files"
-                                  >
-                                    <Download size={12} />
-                                    Dossier
-                                  </button>
-                                  <button
                                     onClick={() => handleManualInitiateSettlement(claim)}
                                     className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-black uppercase tracking-widest transition-all shadow-md flex items-center gap-1 cursor-pointer select-none"
                                   >
                                     <Send size={10} />
                                     Quick Dispatch
+                                  </button>
+                                  <button
+                                    onClick={() => setSelectedFailedClaim(claim)}
+                                    className="px-3 py-1.5 rounded-xl bg-[#000080] hover:bg-[#00005c] text-white text-[10px] font-bold transition-all shadow-md cursor-pointer select-none"
+                                    title="Open interactive manual action panel"
+                                  >
+                                    Open Settlement Panel
                                   </button>
                                 </div>
                               </td>
@@ -2767,26 +2819,43 @@ CRM Operations`,
                     <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-[#141414]/40 pointer-events-none" size={14} />
                   </div>
                 </div>
-                <button 
-                  onClick={() => {
-                    setEmailDraftData({
-                      id: `email-draft-${Date.now()}`,
-                      hospitalId: '',
-                      to: '',
-                      cc: '',
-                      bcc: '',
-                      subject: '',
-                      body: '',
-                      attachments: []
-                    });
-                    setShowEmailDraftModal(true);
-                  }}
-                  className="px-6 py-3 bg-[#141414] text-[#E4E3E0] rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg hover:bg-slate-800 transition-all active:scale-95 flex items-center"
-                >
-                  <PlusCircle size={16} className="mr-2" />
-                  Draft New Email
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setEmailRefreshNonce((value) => value + 1)}
+                    disabled={isEmailSyncing}
+                    className="px-5 py-3 bg-white border border-[#141414]/15 text-[#141414] rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm hover:bg-slate-100 transition-all active:scale-95 flex items-center disabled:opacity-60"
+                    title="Sync received and ClaimNX-sent emails"
+                  >
+                    <RefreshCw size={15} className={`mr-2 ${isEmailSyncing ? 'animate-spin' : ''}`} />
+                    {isEmailSyncing ? 'Syncing...' : 'Refresh Emails'}
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setEmailDraftData({
+                        id: `email-draft-${Date.now()}`,
+                        hospitalId: '',
+                        to: '',
+                        cc: '',
+                        bcc: '',
+                        subject: '',
+                        body: '',
+                        attachments: []
+                      });
+                      setShowEmailDraftModal(true);
+                    }}
+                    className="px-6 py-3 bg-[#141414] text-[#E4E3E0] rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg hover:bg-slate-800 transition-all active:scale-95 flex items-center"
+                  >
+                    <PlusCircle size={16} className="mr-2" />
+                    Draft New Email
+                  </button>
+                </div>
               </div>
+
+              {emailSyncError && (
+                <div className="px-8 py-3 bg-amber-50 border-b border-amber-200 text-[10px] font-bold text-amber-800">
+                  {emailSyncError}
+                </div>
+              )}
 
               <div className="px-8 py-4 bg-emerald-50/50 border-b border-emerald-100 flex flex-wrap items-center gap-3">
                 <span className="text-[10px] font-black uppercase tracking-widest text-emerald-800">Active hospital mailboxes</span>
@@ -2814,14 +2883,9 @@ CRM Operations`,
                   { key: 'Sent', label: 'Sent', icon: Send, color: 'text-emerald-655' },
                   { key: 'Draft', label: 'Drafts', icon: FileText, color: 'text-amber-500' },
                   { key: 'Outbox', label: 'Outbox', icon: Clock, color: 'text-rose-500' },
+                  { key: 'Spam', label: 'Spam', icon: AlertTriangle, color: 'text-rose-600' },
                 ].map((folder) => {
-                  const itemsCount = emailsDb.filter(log => {
-                    if (folder.key === 'Inbox') return log.status === 'Received';
-                    if (folder.key === 'Sent') return log.status === 'Sent' || log.status === 'Responded';
-                    if (folder.key === 'Draft') return log.status === 'Draft';
-                    if (folder.key === 'Outbox') return log.status === 'Queued';
-                    return false;
-                  }).length;
+                  const itemsCount = emailFolderCounts[{ Inbox: 'INBOX', Sent: 'SENT', Draft: 'DRAFTS', Outbox: 'OUTBOX', Spam: 'SPAM' }[folder.key] || 'INBOX'] || 0;
 
                   const isActive = currentEmailFolder === folder.key;
                   return (
@@ -2965,20 +3029,20 @@ CRM Operations`,
                                 <>
                                   <button 
                                     onClick={() => setSelectedEmailForView(log)}
-                                    className="p-2 bg-white border border-[#141414]/10 rounded-lg hover:border-[#141414] transition-all text-slate-500"
+                                    className="px-3 py-1.5 bg-white border border-[#141414]/10 rounded-lg hover:border-[#141414] transition-all text-[10px] font-black uppercase tracking-wider text-slate-700"
                                     title="View Email"
                                   >
-                                    <Eye size={16} />
+                                    View Email
                                   </button>
-                                  <button 
-                                    onClick={() => {
-                                      toast.success('Settlement Letter download initiated');
-                                    }}
-                                    className="p-2 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-lg hover:bg-emerald-600 hover:text-white transition-all"
-                                    title="Download Settlement Letter"
-                                  >
-                                    <FileText size={16} />
-                                  </button>
+                                  {Array.isArray(log.attachments) && log.attachments.length > 0 && (
+                                    <button
+                                      onClick={() => setSelectedEmailForView(log)}
+                                      className="p-2 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-lg hover:bg-emerald-600 hover:text-white transition-all"
+                                      title={`View ${log.attachments.length} attachment${log.attachments.length === 1 ? '' : 's'}`}
+                                    >
+                                      <Paperclip size={16} />
+                                    </button>
+                                  )}
                                 </>
                               )}
                             </div>
@@ -3106,13 +3170,14 @@ CRM Operations`,
                   <BarChart3 size={20} /> Recovery Trend (Last 7 Days)
                 </h3>
                 <div className="h-64 flex items-end justify-between gap-2">
-                  {[45, 60, 35, 80, 55, 90, 75].map((val, i) => (
-                    <div key={i} className="flex-1 flex flex-col items-center gap-2">
+                  {livePerformance.days.map((day) => (
+                    <div key={day.label} className="flex-1 flex flex-col items-center gap-2" title={`${day.label}: ${formatIndianCurrencyCompact(day.amount)}`}>
                       <div 
                         className="w-full bg-[#141414] rounded-t-lg transition-all hover:bg-emerald-500 cursor-pointer" 
-                        style={{ height: `${val}%` }}
+                        style={{ height: `${Math.max(day.amount ? 8 : 2, (day.amount / livePerformance.maxTrend) * 100)}%` }}
                       ></div>
-                      <span className="text-[8px] font-black text-[#141414]/40 uppercase tracking-widest">Day {i+1}</span>
+                      <span className="text-[8px] font-black text-[#141414]/40 uppercase tracking-widest">{day.label}</span>
+                      <span className="text-[8px] font-bold text-emerald-700">{formatIndianCurrencyCompact(day.amount)}</span>
                     </div>
                   ))}
                 </div>
@@ -3123,25 +3188,22 @@ CRM Operations`,
                   <Trophy size={20} /> Top Performers (Recovery)
                 </h3>
                 <div className="space-y-4">
-                  {[
-                    { name: 'Rahul A.', recovered: '₹4.2M', target: '₹5M', pct: 84 },
-                    { name: 'Suresh K.', recovered: '₹3.8M', target: '₹5M', pct: 76 },
-                    { name: 'Priya S.', recovered: '₹3.1M', target: '₹5M', pct: 62 },
-                  ].map((user, i) => (
-                    <div key={i} className="p-4 bg-[#F8F8F7] rounded-2xl border border-[#141414]/5">
+                  {livePerformance.ranked.length === 0 ? <p className="text-sm text-slate-400">No attributed settlements yet.</p> : livePerformance.ranked.map((user, i) => {
+                    const pct = Math.round((user.amount / livePerformance.maxPerformer) * 100);
+                    return <div key={`${user.name}-${i}`} className="p-4 bg-[#F8F8F7] rounded-2xl border border-[#141414]/5">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-xs font-black uppercase tracking-widest">{user.name}</p>
-                        <p className="text-xs font-black text-emerald-600">{user.recovered}</p>
+                        <p className="text-xs font-black text-emerald-600">{formatIndianCurrencyCompact(user.amount)}</p>
                       </div>
                       <div className="w-full h-2 bg-white rounded-full overflow-hidden border border-[#141414]/5">
-                        <div className="h-full bg-[#141414]" style={{ width: `${user.pct}%` }}></div>
+                        <div className="h-full bg-[#141414]" style={{ width: `${pct}%` }}></div>
                       </div>
                       <div className="flex items-center justify-between mt-1">
-                        <p className="text-[8px] font-bold text-[#141414]/40 uppercase tracking-widest">Target: {user.target}</p>
-                        <p className="text-[8px] font-bold text-[#141414]/40 uppercase tracking-widest">{user.pct}%</p>
+                        <p className="text-[8px] font-bold text-[#141414]/40 uppercase tracking-widest">{user.count} settlements</p>
+                        <p className="text-[8px] font-bold text-[#141414]/40 uppercase tracking-widest">{pct}% of leader</p>
                       </div>
                     </div>
-                  ))}
+                  })}
                 </div>
               </div>
             </div>
@@ -3640,21 +3702,22 @@ CRM Operations`,
                   Cancel
                 </button>
                 <button 
-                  onClick={() => {
-                    console.log('Email Log:', {
-                      sentAt: new Date().toISOString(),
-                      user: currentUser.displayName,
-                      to: emailData.to,
-                      subject: emailData.subject,
-                      cases: selectedClaims
-                    });
-                    toast.success(`Follow-up emails sent for ${selectedClaims.length} cases.`);
-                    setShowBulkEmailModal(false);
-                    setSelectedClaims([]);
+                  onClick={async () => {
+                    const selectedData = claimsWithAging.filter((claim) => selectedClaims.includes(claim.id));
+                    const hospitalIds = [...new Set(selectedData.map(claimHospitalId).filter(Boolean))];
+                    const mailbox = hospitalIds.length === 1 ? getActiveMailboxForHospital(hospitalIds[0]) : undefined;
+                    if (!mailbox || !emailData.to.trim()) { toast.error('An active hospital mailbox and recipient email are required.'); return; }
+                    setIsSendingBulkFollowUp(true);
+                    try {
+                      await claimnxApi.post(`/email/mailboxes/${encodeURIComponent(mailbox.id)}/send`, { to: emailData.to.split(',').map((value) => value.trim()).filter(Boolean), cc: emailData.cc.split(',').map((value) => value.trim()).filter(Boolean), bcc: emailData.bcc.split(',').map((value) => value.trim()).filter(Boolean), subject: emailData.subject, plainTextBody: emailData.body, claimIds: selectedData.map((claim) => claim.id) });
+                      toast.success(`Follow-up email sent from ${mailbox.email_address}.`);
+                      setShowBulkEmailModal(false); setSelectedClaims([]);
+                    } catch (error: any) { toast.error(error?.message || 'The follow-up email could not be sent.'); } finally { setIsSendingBulkFollowUp(false); }
                   }}
-                  className="flex-1 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest bg-[#141414] text-[#E4E3E0] hover:scale-105 active:scale-95 transition-all shadow-xl flex items-center justify-center gap-2"
+                  disabled={isSendingBulkFollowUp}
+                  className="flex-1 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest bg-[#141414] text-[#E4E3E0] hover:scale-105 active:scale-95 transition-all shadow-xl flex items-center justify-center gap-2 disabled:opacity-60"
                 >
-                  <Send size={14} /> Send Bulk Emails
+                  <Send size={14} /> {isSendingBulkFollowUp ? 'Sending…' : 'Send Bulk Emails'}
                 </button>
               </div>
             </motion.div>

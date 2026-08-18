@@ -107,12 +107,14 @@ export class DocumentsController {
     @Query('document_id') documentId?: string,
     @Query('file_name') fileName?: string,
     @Query('category') category?: string,
+    @Query('uploaded_at') uploadedAt?: string,
   ) {
     return this.documentsService.resolveClaimDocument({
       claimId,
       documentId,
       fileName,
       category,
+      uploadedAt,
       actor,
     });
   }
@@ -146,7 +148,8 @@ export class DocumentsController {
   @Delete(':id')
   remove(
     @Param('id') id: string,
+    @CurrentUser() actor: any,
   ) {
-    return this.documentsService.remove(id);
+    return this.documentsService.remove(id, actor);
   }
 }

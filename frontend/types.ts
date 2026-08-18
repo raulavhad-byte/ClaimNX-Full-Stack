@@ -455,6 +455,8 @@ export interface HospitalUser {
   permissions?: string[];
   hospitalSeal?: string;
   doctorStamp?: string;
+  hospitalSealStoragePath?: string;
+  doctorStampStoragePath?: string;
   authorizedSignatory?: string;
   reportsToId?: string;
   firstName?: string;
@@ -1169,6 +1171,7 @@ export interface ReportConfig {
   status: 'Active' | 'Paused';
   createdBy: string;
   createdAt: string;
+  templateId?: string;
 }
 
 export interface ReportDeliveryLog {

@@ -301,8 +301,10 @@ function toUserRequestPayload(user: any, includePassword: boolean): Record<strin
         rateListType: credential?.rateListType ?? '',
       }))
       : [],
-    hospitalSeal: user?.hospitalSeal ?? '',
-    doctorStamp: user?.doctorStamp ?? '',
+    // Binary profile assets are stored in the private profile-assets bucket.
+    // Only durable object references may be persisted in profile JSON.
+    hospitalSealStoragePath: user?.hospitalSealStoragePath ?? '',
+    doctorStampStoragePath: user?.doctorStampStoragePath ?? '',
     agreementType: user?.agreementType ?? '',
     agreementValue: user?.agreementValue ?? 0,
     agreementStartDate: user?.agreementStartDate ?? '',
@@ -318,6 +320,7 @@ function toUserRequestPayload(user: any, includePassword: boolean): Record<strin
     allowedStages: Array.isArray(user?.allowedStages) ? user.allowedStages : [],
     invoiceGenerationType: user?.invoiceGenerationType ?? '',
     statusReason: user?.statusReason ?? '',
+    photoStoragePath: user?.photoStoragePath ?? '',
   };
   const payload: Record<string, unknown> = {
     email: user?.emailId ?? user?.email,
@@ -344,9 +347,16 @@ function toPortalInsuranceEntity(entity: any): any {
     try { metadata = JSON.parse(entity.data) as Record<string, unknown>; } catch { /* preserve legacy data */ }
   }
 
+  // Legacy configuration may contain sensitive values from an older browser
+  // storage model. Never propagate credentials, tokens, or keys into React
+  // state even if an old API/database record still contains them.
+  const stripSensitiveFields = (value: Record<string, unknown>) => Object.fromEntries(
+    Object.entries(value).filter(([key]) => !/(password|secret|token|api_?key|credential)/i.test(key)),
+  );
+
   return {
-    ...metadata,
-    ...entity,
+    ...stripSensitiveFields(metadata),
+    ...stripSensitiveFields(entity ?? {}),
     name: entity?.name ?? entity?.display_name ?? '',
     emailId: entity?.emailId ?? entity?.email_id ?? '',
     settlementEmail: entity?.settlementEmail ?? metadata.settlementEmail ?? '',
@@ -500,6 +510,12 @@ export const claimsApi = {
       data: collectionFrom(await request(`/claims${query}`), []).map(toPortalClaim),
     };
   },
+  findLatestByMobile: async (mobile: string, hospitalId: string) => {
+    return request('/claims/history/by-mobile', {
+      method: 'POST',
+      body: JSON.stringify({ mobile, hospital_id: hospitalId }),
+    });
+  },
   getOne: async (id: string) => ({
     data: toPortalClaim(await request(`/claims/${encodeURIComponent(id)}`)),
   }),
@@ -542,6 +558,28 @@ export const claimsApi = {
   deleteAll: async () => request('/claims', { method: 'DELETE' }),
 };
 
+// Reimbursement products own a dedicated backend workflow.  These methods do
+// not fall back to browser storage: an apparent local save would create an
+// unauditable reimbursement, KYP, or recovery record.
+export const reimbursementApi = {
+  list: async (hospitalId?: string, productCode?: string) => {
+    const params = new URLSearchParams();
+    if (hospitalId) params.set('hospitalId', hospitalId);
+    if (productCode) params.set('productCode', productCode);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request(`/reimbursement/cases${suffix}`);
+  },
+  create: async (payload: {
+    productCode: 'ICA' | 'PRE_POST' | 'PARTNER_PROCESSING' | 'KYP' | 'RECOVERY_RECON';
+    hospitalId: string; claimId?: string; parentCaseId?: string; patientId?: string;
+    payerId?: string; totalClaimedAmount?: number; metadata?: Record<string, unknown>;
+  }) => request('/reimbursement/cases', { method: 'POST', body: JSON.stringify(payload) }),
+  transition: async (caseId: string, targetStatusCode: string, reason?: string, metadata?: Record<string, unknown>) =>
+    request(`/reimbursement/cases/${encodeURIComponent(caseId)}/transitions`, {
+      method: 'POST', body: JSON.stringify({ targetStatusCode, reason, metadata }),
+    }),
+};
+
 const usersResource = createLegacyResource('/users');
 export const usersApi = {
   ...usersResource,
@@ -566,6 +604,24 @@ export const usersApi = {
     await request(`/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
     return { data: null };
   },
+  uploadAvatar: async (id: string, file: File) => {
+    const body = new FormData();
+    body.append('file', file, file.name);
+    return request(`/users/${encodeURIComponent(id)}/avatar`, { method: 'POST', body });
+  },
+  getAvatarUrl: async (id: string) =>
+    request(`/users/${encodeURIComponent(id)}/avatar-url`),
+  deleteAvatar: async (id: string) =>
+    request(`/users/${encodeURIComponent(id)}/avatar`, { method: 'DELETE' }),
+  uploadProfileAsset: async (id: string, kind: 'hospital-seal' | 'doctor-stamp', file: File) => {
+    const body = new FormData();
+    body.append('file', file, file.name);
+    return request(`/users/${encodeURIComponent(id)}/assets/${kind}`, { method: 'POST', body });
+  },
+  getProfileAssetUrl: async (id: string, kind: 'hospital-seal' | 'doctor-stamp') =>
+    request(`/users/${encodeURIComponent(id)}/assets/${kind}/url`),
+  deleteProfileAsset: async (id: string, kind: 'hospital-seal' | 'doctor-stamp') =>
+    request(`/users/${encodeURIComponent(id)}/assets/${kind}`, { method: 'DELETE' }),
   sync: async (user: any) => ({ data: user }),
 };
 
@@ -647,20 +703,25 @@ export const documentsApi = {
       documentId,
       fileName,
       category,
+      uploadedAt,
     }: {
       claimId: string;
       documentId?: string;
       fileName?: string;
       category?: string;
+      uploadedAt?: string;
     }) => {
       const query = new URLSearchParams();
       if (documentId) query.set('document_id', documentId);
       if (fileName) query.set('file_name', fileName);
       if (category) query.set('category', category);
+      if (uploadedAt) query.set('uploaded_at', uploadedAt);
       return request(`/documents/claim/${encodeURIComponent(claimId)}/resolve?${query.toString()}`);
     },
-    previewClaimDocument: async (documentId: string) =>
+  previewClaimDocument: async (documentId: string) =>
     request(`/documents/${encodeURIComponent(documentId)}/preview`),
+  deleteClaimDocument: async (documentId: string) =>
+    request(`/documents/${encodeURIComponent(documentId)}`, { method: 'DELETE' }),
   uploadHospitalRateList: async ({
     hospitalUserId,
     payerId,
@@ -678,4 +739,12 @@ export const documentsApi = {
   },
   previewHospitalRateList: async (storagePath: string) =>
     request(`/documents/hospital-asset/preview?path=${encodeURIComponent(storagePath)}`),
+};
+
+export const ocrApi = {
+  extractPolicyECard: async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    return request('/ocr/policy-e-card', { method: 'POST', body: formData });
+  },
 };

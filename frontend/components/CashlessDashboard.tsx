@@ -598,15 +598,9 @@ const CashlessDashboard: React.FC<CashlessDashboardProps> = ({
   const handleRefresh = () => {
     setIsSyncing(true);
     setSyncMessage(null);
-
-    // Simulate API delay / Refresh
-    setTimeout(() => {
-      setIsSyncing(false);
-      setSyncMessage("Dashboard Data Refreshed");
-
-      // Auto-clear message
-      setTimeout(() => setSyncMessage(null), 3000);
-    }, 500);
+    // Reload the active route so the dashboard fetches a fresh server-backed
+    // state instead of only displaying a simulated refresh notification.
+    window.location.reload();
   };
 
   const handleDownloadKyp = async (kyp: KYPPolicy) => {

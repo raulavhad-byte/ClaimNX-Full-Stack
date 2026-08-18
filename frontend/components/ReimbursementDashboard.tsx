@@ -980,10 +980,7 @@ const ReimbursementDashboard: React.FC<ReimbursementDashboardProps> = ({
         </div>
         <div className="flex items-center gap-3">
              <button 
-               onClick={() => {
-                 setSearchQuery('');
-                 toast.success(`${product} dashboard refreshed`);
-               }}
+               onClick={() => window.location.reload()}
                className="flex items-center gap-2 px-4 py-2.5 bg-[#008080] text-white rounded-2xl hover:bg-[#0066CC] transition-all text-[10px] font-black uppercase tracking-widest shadow-lg shadow-[#008080]/30 active:scale-95"
              >
                 <RefreshCw size={14} /> Refresh

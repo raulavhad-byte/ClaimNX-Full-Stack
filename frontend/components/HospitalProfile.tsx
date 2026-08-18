@@ -1,6 +1,7 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { HospitalUser, WalletTransaction, AgreementType } from '../types';
+import { usersApi } from '../services/api';
 import { 
   Building, Stethoscope, Mail, Phone, MapPin, BadgeCheck, Save, Loader2, 
   CheckCircle2, User, Image as ImageIcon, Trash2, Zap, ShieldCheck, 
@@ -46,48 +47,43 @@ const HospitalProfile: React.FC<HospitalProfileProps> = ({ user, onUpdate }) => 
   const [isEditingBasic, setIsEditingBasic] = useState(false);
   const [isEditingAccount, setIsEditingAccount] = useState(false);
 
-  // --- Image Helpers ---
-  const resizeTo100x100 = (file: File): Promise<string> => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const img = document.createElement('img');
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = 300; 
-          canvas.height = 300; 
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
-            ctx.clearRect(0, 0, 300, 300);
-            const ratio = Math.min(300 / img.width, 300 / img.height);
-            const newWidth = img.width * ratio;
-            const newHeight = img.height * ratio;
-            const x = (300 - newWidth) / 2;
-            const y = (300 - newHeight) / 2;
-            ctx.drawImage(img, x, y, newWidth, newHeight);
-            resolve(canvas.toDataURL('image/png', 0.95));
-          }
-        };
-        img.src = e.target?.result as string;
-      };
-      reader.readAsDataURL(file);
-    });
-  };
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      usersApi.getProfileAssetUrl(user.id, 'hospital-seal'),
+      usersApi.getProfileAssetUrl(user.id, 'doctor-stamp'),
+    ]).then(([seal, stamp]: any[]) => {
+      if (cancelled) return;
+      setFormData((current) => ({
+        ...current,
+        hospitalSeal: seal?.asset_url || current.hospitalSeal || '',
+        hospitalSealStoragePath: seal?.storage_path || current.hospitalSealStoragePath,
+        doctorStamp: stamp?.asset_url || current.doctorStamp || '',
+        doctorStampStoragePath: stamp?.storage_path || current.doctorStampStoragePath,
+      }));
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [user.id]);
 
   const handleFileUpload = async (field: 'hospitalSeal' | 'doctorStamp', file: File | null) => {
     if (!file) return;
     setProcessingImage(field);
     try {
-      const resizedDataUrl = await resizeTo100x100(file);
-      const updatedData = { ...formData, [field]: resizedDataUrl };
+      const kind = field === 'hospitalSeal' ? 'hospital-seal' : 'doctor-stamp';
+      const storageField = field === 'hospitalSeal' ? 'hospitalSealStoragePath' : 'doctorStampStoragePath';
+      const response: any = await usersApi.uploadProfileAsset(user.id, kind, file);
+      const updatedData = {
+        ...formData,
+        [field]: response.asset_url,
+        [storageField]: response.storage_path,
+      };
       setFormData(updatedData);
-      onUpdate(updatedData); // Save immediately
+      onUpdate(updatedData);
     } catch (err) {
       console.error("Image processing failed:", err);
+      setError(err instanceof Error ? err.message : 'Unable to upload the image securely.');
     } finally {
-      setTimeout(() => setProcessingImage(null), 800);
+      setProcessingImage(null);
     }
   };
 

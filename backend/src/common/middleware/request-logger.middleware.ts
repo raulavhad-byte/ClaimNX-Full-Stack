@@ -17,9 +17,9 @@ export class RequestLoggerMiddleware implements NestMiddleware {
     res.on('finish', () => {
       const duration = Date.now() - start;
 
-      console.log(
-        `${req.method} ${req.originalUrl} ${res.statusCode} ${duration}ms`,
-      );
+      // URLs can contain OAuth authorization codes, search values, claim IDs,
+      // and other sensitive metadata. Never write the query string to logs.
+      console.log(`${req.method} ${req.path} ${res.statusCode} ${duration}ms`);
     });
 
     next();

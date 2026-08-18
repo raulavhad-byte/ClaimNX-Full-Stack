@@ -22,6 +22,17 @@ export class ClaimNXApiError extends Error {
   }
 }
 
+/**
+ * Raised only when the browser cannot establish a connection to ClaimNX.
+ * It deliberately contains no transport internals or endpoint details.
+ */
+export class ClaimNXNetworkError extends Error {
+  constructor() {
+    super('Network connection unavailable. Check your internet connection and try again.');
+    this.name = 'ClaimNXNetworkError';
+  }
+}
+
 type JsonObject = Record<string, unknown>;
 
 const isJsonObject = (value: unknown): value is JsonObject =>
@@ -63,17 +74,26 @@ export class ClaimNXApiClient {
   ): Promise<T> {
     const token = this.getAccessToken();
     const hasBody = options.body !== undefined;
-    const response = await fetch(`${this.baseUrl}/${path.replace(/^\/+/, '')}`, {
-      method,
-      signal: options.signal,
-      headers: {
-        Accept: 'application/json',
-        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...options.headers,
-      },
-      body: hasBody ? JSON.stringify(options.body) : undefined,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/${path.replace(/^\/+/, '')}`, {
+        method,
+        signal: options.signal,
+        headers: {
+          Accept: 'application/json',
+          ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...options.headers,
+        },
+        body: hasBody ? JSON.stringify(options.body) : undefined,
+      });
+    } catch (error) {
+      // An explicit caller cancellation should remain distinguishable from a
+      // connectivity fault. All other browser fetch failures are safely shown
+      // as a connection error rather than an authentication error.
+      if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      throw new ClaimNXNetworkError();
+    }
 
     const raw = await response.text();
     let payload: unknown = undefined;

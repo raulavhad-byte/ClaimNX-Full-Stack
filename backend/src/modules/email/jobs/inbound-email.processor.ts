@@ -10,6 +10,8 @@ export class InboundEmailProcessor {
 
   async processInboundJob(jobData: { hospitalId: string; email: NormalizedEmail }) {
     this.logger.log(`Processing inbound email job: ${jobData.email.providerMessageId}`);
-    return this.emailService.processInboundEmail(jobData.hospitalId, jobData.email, [], []);
+    // Inbound processing is scoped to the connected mailbox, not a hospital
+    // ID. The normalized payload already carries that authoritative account.
+    return this.emailService.processInboundEmail(jobData.email.accountId, jobData.email);
   }
 }

@@ -8,7 +8,6 @@ import {
   ExternalLink,
   Lock,
   Eye,
-  EyeOff,
   CheckCircle2,
   AlertCircle,
   FileText,
@@ -30,7 +29,6 @@ import {
   Activity,
   Download,
 } from "lucide-react";
-import { dualStorageService, DISABLE_FIRESTORE } from "../services/dualStorageService";
 import {
   Claim,
   ClaimStatus,
@@ -42,6 +40,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { auditService } from "../services/auditService";
 import { emailTemplateService } from "../services/emailTemplateService";
 import { claimsApi, configApi, documentsApi, usersApi } from "../services/api";
+import { claimnxApi } from "../services/claimnx-api";
 import { toast } from "sonner";
 
 import { formatDate, formatTimelineEventTAT } from "../utils";
@@ -76,11 +75,9 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
     "email" | "portal" | "documents" | "timeline" | "assessment"
   >("email");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showPassword, setShowPassword] = useState(true);
-
-  // Portal Credential States
+  // Portal configuration. Credentials are deliberately never read into the
+  // browser; they must be managed by the server-side secret store.
   const [portalId, setPortalId] = useState("");
-  const [portalPassword, setPortalPassword] = useState("");
   const [portalLink, setPortalLink] = useState("");
   const [isUpdatingPortal, setIsUpdatingPortal] = useState(false);
 
@@ -91,26 +88,9 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
 
   const handleDeletePatientDoc = async (docId: string) => {
     try {
-      if (DISABLE_FIRESTORE) {
-        const localKey = "claimnx_patientDocuments";
-        let localDocs: any[] = [];
-        try {
-          localDocs = JSON.parse(localStorage.getItem(localKey) || "[]");
-        } catch (err) {
-          localDocs = [];
-        }
-
-        const filtered = localDocs.filter((d: any) => d.id !== docId);
-        localStorage.setItem(localKey, JSON.stringify(filtered));
-
-        // Update states immediately
-        setPatientDocs((prev) => prev.filter((d) => d.id !== docId));
-        setSelectedDocs((prev) => prev.filter((d) => d.id !== docId));
-      } else {
-        await dualStorageService.delete("patientDocuments", docId);
-        setPatientDocs((prev) => prev.filter((d) => d.id !== docId));
-        setSelectedDocs((prev) => prev.filter((d) => d.id !== docId));
-      }
+      await documentsApi.deleteClaimDocument(docId);
+      setPatientDocs((prev) => prev.filter((d) => d.id !== docId));
+      setSelectedDocs((prev) => prev.filter((d) => d.id !== docId));
       toast.success("Attachment deleted successfully.");
     } catch (err: any) {
       console.error("Error deleting patient document:", err);
@@ -133,6 +113,8 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
   const [emailCc, setEmailCc] = useState("");
   const [emailSubject, setEmailSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
+  const [hospitalMailbox, setHospitalMailbox] = useState<{ id: string; email_address: string } | null>(null);
+  const [isMailboxLoading, setIsMailboxLoading] = useState(false);
 
   // Update States
   const [newStatus, setNewStatus] = useState<ClaimStatus | "">("");
@@ -175,32 +157,29 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
     );
   }, [claim, hospital, insuranceEntity]);
 
-  const smtpConfig = useMemo(() => {
-    return (
-      hospital?.smtpConfigs?.find((cfg: any) => cfg.status === "Connected") ||
-      hospital?.smtpConfigs?.[0]
-    );
-  }, [hospital]);
-
-  const fromEmail = useMemo(() => {
-    return (
-      smtpConfig?.fromEmail ||
-      smtpConfig?.username ||
-      hospital?.emailId ||
-      `${hospital?.hospitalName?.toLowerCase().replace(/\s/g, "") || "hospital"}@claimnx.com`
-    );
-  }, [smtpConfig, hospital]);
-
-  const [hasInitializedDocs, setHasInitializedDocs] = useState(false);
-  const lastInitializedClaimId = useRef<string | null>(null);
-  const patientDocsRef = useRef<PatientDocument[]>([]);
+  const fromEmail = hospitalMailbox?.email_address ?? '';
 
   useEffect(() => {
-    if (claim && claim.id !== lastInitializedClaimId.current) {
-      setHasInitializedDocs(false);
-      lastInitializedClaimId.current = claim.id;
+    if (!claim?.id) {
+      setHospitalMailbox(null);
+      return;
     }
+    let cancelled = false;
+    setIsMailboxLoading(true);
+    claimnxApi.get<{ id: string; email_address: string } | null>(`/email/claims/${encodeURIComponent(claim.id)}/mailbox`)
+      .then((mailbox) => {
+        if (!cancelled) setHospitalMailbox(mailbox);
+      })
+      .catch(() => {
+        if (!cancelled) setHospitalMailbox(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsMailboxLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [claim?.id]);
+
+  const lastInitializedClaimId = useRef<string | null>(null);
 
   useEffect(() => {
     if (claim) {
@@ -244,11 +223,22 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
   }, [claim, insuranceEntity, hospital]);
 
   useEffect(() => {
-    if (!claim || !/(pre.?auth|enhancement|discharge)/i.test(claim.status)) return;
-    const latestStageEvent = (claim.history || []).find((event: any) =>
-      event.fileData || event.stageData?.documents?.length || event.stageData?.attachedDocs?.length,
-    );
-    if (!latestStageEvent) return;
+    if (!claim) return;
+    const eligibleStages = new Set([
+      'PRE AUTH INITIATED', 'QUERY REPLY DONE', 'PRE AUTH REJECTED',
+      'INITIATE ENHANCEMENT', 'DISCHARGE INITIATED', 'ENHANCEMENT REJECTED',
+      'DISCHARGE QUERY REPLIED', 'DISCHARGE REJECTED', 'DISCHARGE RECONSIDERATION RAISED',
+    ]);
+    const stageKey = (value: unknown) => String(value ?? '').trim().toUpperCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ');
+    const latestStageEvent = [...(claim.history || [])]
+      .filter((event: any) => eligibleStages.has(stageKey(event.status)))
+      .sort((left: any, right: any) => new Date(right.date || 0).getTime() - new Date(left.date || 0).getTime())
+      .find((event: any) => event.fileData || event.stageData?.documents?.length || event.stageData?.attachedDocs?.length);
+    if (!latestStageEvent) {
+      setSelectedDocs([]);
+      setPatientDocs([]);
+      return;
+    }
     const stageDocs: PatientDocument[] = [latestStageEvent].flatMap((event: any, eventIndex) => {
       const documents = event.stageData?.documents || [];
       const namedDocuments = event.stageData?.attachedDocs || [];
@@ -278,11 +268,9 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
       }] : [];
       return [...fromDocuments, ...fromNames, ...fromEventFile];
     });
-    if (stageDocs.length) {
-      setSelectedDocs((current) => [...current, ...stageDocs.filter((document) => !current.some((selected) => selected.fileName === document.fileName))]);
-      setPatientDocs((current) => [...current, ...stageDocs.filter((document) => !current.some((available) => available.fileName === document.fileName))]);
-    }
-  }, [claim?.id, claim?.status]);
+    setSelectedDocs(stageDocs);
+    setPatientDocs(stageDocs);
+  }, [claim]);
 
   const formatDateForDisplay = (dateStr: string) => {
     if (!dateStr) return "";
@@ -436,72 +424,12 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
       // IMPORTANT: Check both entityId (new) and entityName (legacy/ManageHospital behavior)
       if (payerCredential) {
         setPortalId(payerCredential.username || "");
-        setPortalPassword(payerCredential.password || "");
       } else {
         setPortalId(insuranceEntity.portalId || "");
-        setPortalPassword(insuranceEntity.portalPassword || "");
       }
         setPortalLink((payerCredential as any)?.portalLink || insuranceEntity.portalLink || "");
     }
   }, [insuranceEntity, payerCredential]);
-
-  useEffect(() => {
-    if (!claim) return;
-
-    const fetchLocalDocs = () => {
-      const localKey = "claimnx_patientDocuments";
-      let localDocs: any[] = [];
-      try {
-        localDocs = JSON.parse(localStorage.getItem(localKey) || "[]");
-      } catch (e) {
-        localDocs = [];
-      }
-
-      // Filter by linkedClaimId
-      const filtered = localDocs.filter(
-        (doc: any) => doc.linkedClaimId === claim.id,
-      );
-
-      // If we switched claims, reset initialization
-      if (lastInitializedClaimId.current !== claim.id) {
-        setHasInitializedDocs(false);
-        lastInitializedClaimId.current = claim.id;
-      }
-
-      setPatientDocs((current) => [
-        ...filtered,
-        ...current.filter((document: any) => document.__stageAttachment && !filtered.some((stored) => stored.fileName === document.fileName)),
-      ]);
-
-      setSelectedDocs((currentSelected) => {
-        if (!hasInitializedDocs) {
-          // Keep auto-enclosed workflow-stage documents alongside the
-          // persisted patient document list on the first CRM email load.
-          const stageDocuments = currentSelected.filter((document) =>
-            document.linkedClaimId === claim.id && (document as any).__stageAttachment,
-          );
-          return [...filtered, ...stageDocuments.filter((document) =>
-            !filtered.some((stored) => stored.fileName === document.fileName),
-          )];
-        }
-        const newDocs = filtered.filter(
-          (d) => !patientDocsRef.current.some((pd) => pd.id === d.id),
-        );
-        return [...currentSelected, ...newDocs];
-      });
-
-      patientDocsRef.current = filtered;
-
-      if (!hasInitializedDocs) {
-        setHasInitializedDocs(true);
-      }
-    };
-
-    fetchLocalDocs();
-
-    const interval = setInterval(fetchLocalDocs, 1000);
-    return () => clearInterval(interval);
-  }, [claim?.id, hasInitializedDocs]);
 
   const handlePortalUpdate = async () => {
     if (!insuranceEntity) return;
@@ -509,7 +437,6 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
     try {
       const updatedData = {
         portalId,
-        portalPassword,
         portalLink,
       };
 
@@ -532,7 +459,6 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
         const newCredObj = {
           entityId: insuranceEntity.name,
           username: portalId,
-          password: portalPassword,
           startDate: new Date().toISOString().split("T")[0],
           endDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
             .toISOString()
@@ -545,7 +471,6 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
           updatedPortalCredentials[credIndex] = {
             ...updatedPortalCredentials[credIndex],
             username: portalId,
-            password: portalPassword,
           };
         } else {
           updatedPortalCredentials.push(newCredObj);
@@ -562,7 +487,7 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
         }
       }
 
-      toast.success("Portal credentials updated successfully!");
+      toast.success("Portal configuration updated successfully.");
     } catch (error) {
       console.error("Error updating portal details:", error);
       toast.error("Failed to update portal details.");
@@ -572,49 +497,66 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
   };
 
   const handleEmailSend = async () => {
+    if (!hospitalMailbox) {
+      toast.error('Connect an active email mailbox for this claim hospital before sending.');
+      return;
+    }
+    if (!emailTo.trim()) {
+      toast.error('An insurer or TPA recipient email is required.');
+      return;
+    }
     setIsSubmitting(true);
-    // Process update immediately
+    try {
+      const attachments = await Promise.all(selectedDocs.map(async (document) => {
+        let content = document.fileData || '';
+        if (!content && (document as any).documentId) {
+          const preview = await documentsApi.previewClaimDocument((document as any).documentId);
+          const response = await fetch(preview.preview_url);
+          if (!response.ok) throw new Error(`Unable to read ${document.fileName}`);
+          const blob = await response.blob();
+          content = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => reject(new Error(`Unable to read ${document.fileName}`));
+            reader.readAsDataURL(blob);
+          });
+        }
+        const contentBase64 = content.includes(',') ? content.split(',')[1] : content;
+        if (!contentBase64) throw new Error(`The selected stage attachment ${document.fileName} is unavailable.`);
+        return {
+          filename: document.fileName,
+          contentType: (document as any).mimeType || 'application/octet-stream',
+          contentBase64,
+        };
+      }));
 
-    const updatedClaim: Claim = {
-      ...claim,
-      submissionStatus: "Success",
-      manualSubmissionType: "Email",
-      manualSubmissionAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      history: [
-        {
-          id: `crm-${Date.now()}`,
-          status: claim.status,
-          type: "status_change",
-          date: new Date().toISOString(),
-          comment: `Manual Email Submission to ${emailTo}. Subject: ${emailSubject}. Attached ${selectedDocs.length} documents. Remarks: ${remarks || 'No comment provided'}.`,
-          emailSent: true,
-          stageData: {
-            attachedDocs: selectedDocs.map((d) => d.fileName),
-            subject: emailSubject,
-          },
-        },
-        ...claim.history,
-      ],
-    };
+      await claimnxApi.post(`/email/mailboxes/${encodeURIComponent(hospitalMailbox.id)}/send`, {
+        to: emailTo.split(',').map((value) => value.trim()).filter(Boolean),
+        cc: emailCc.split(',').map((value) => value.trim()).filter(Boolean),
+        subject: emailSubject,
+        plainTextBody: emailBody,
+        claimId: claim.id,
+        attachments,
+      });
 
-    onUpdate(updatedClaim);
-    auditService.log({
-      userId: currentUser.id,
-      userName: currentUser.displayName,
-      action: "Manual Email Submission",
-      resourceId: claim.id,
-      resourceType: "Claim",
-      previousValues: { submissionStatus: claim.submissionStatus },
-      newValues: {
-        submissionStatus: "Success",
-        method: "Email",
-        recipient: emailTo,
-      },
-    });
-
-    setIsSubmitting(false);
-    navigate("/crm-dashboard");
+      const updatedClaim: Claim = {
+        ...claim,
+        submissionStatus: 'Success', manualSubmissionType: 'Email',
+        manualSubmissionAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        history: [{ id: `crm-email-${Date.now()}`, status: claim.status, type: 'status_change', date: new Date().toISOString(),
+          comment: `Email sent from ${fromEmail} to ${emailTo}. Subject: ${emailSubject}. Attached ${selectedDocs.length} current-stage documents.`,
+          emailSent: true, stageData: { attachedDocs: selectedDocs.map((document) => document.fileName), subject: emailSubject },
+        }, ...claim.history],
+      };
+      await onUpdate(updatedClaim);
+      auditService.log({ userId: currentUser.id, userName: currentUser.displayName, action: 'CRM email resend', resourceId: claim.id, resourceType: 'Claim', previousValues: { submissionStatus: claim.submissionStatus }, newValues: { submissionStatus: 'Success', method: 'Email', recipient: emailTo, mailbox: fromEmail } });
+      toast.success(`Email sent from ${fromEmail}.`);
+      navigate('/crm-dashboard');
+    } catch (error: any) {
+      toast.error(error?.message || 'Unable to send email from the hospital mailbox.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handlePortalSubmit = async () => {
@@ -658,24 +600,26 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
     if (!crmDecisionComment.trim()) return;
     setIsSubmitting(true);
     try {
-      // Persist the note first. The Documents backend links each upload to the
-      // newest timeline event, which is now this CRM comment rather than the
-      // preceding workflow stage.
-      const commentResponse = await claimsApi.addCrmComment(claim.id, crmDecisionComment);
-      onUpdate(commentResponse.data);
       const uploaded = await Promise.all(crmDecisionFiles.map(async (file) => {
         const document = await documentsApi.uploadClaimFile({ claimId: claim.id, file, category: 'CRM Decision' });
         return { id: document?.id, name: document?.file_name || document?.fileName || file.name, mimeType: document?.mime_type || document?.mimeType || file.type };
       }));
-      if (uploaded.length > 0) {
-        const refreshed = await claimsApi.getOne(claim.id);
-        onUpdate(refreshed.data);
-      }
+
+      // Completing the CRM Decision releases this claim from the reviewer's
+      // Under Review queue. Unlike a general timeline note, this endpoint
+      // records the decision, attachments and transition as one workflow step.
+      const decisionResponse = await claimsApi.submitCrmDecision(
+        claim.id,
+        crmDecisionComment.trim(),
+        uploaded,
+      );
+      onUpdate(decisionResponse.data);
       setCrmDecisionComment('');
       setCrmDecisionFiles([]);
-      toast.success('CRM comment added to the patient timeline.');
+      toast.success('CRM decision recorded. Returning to the Command Center.');
+      navigate('/crm-dashboard');
     } catch (error: any) {
-      toast.error(error?.message || 'Unable to add CRM comment');
+      toast.error(error?.message || 'Unable to complete CRM decision');
     } finally {
       setIsSubmitting(false);
     }
@@ -743,10 +687,10 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8 animate-in slide-in-from-bottom-4 duration-500">
+    <div className="w-full max-w-[1600px] mx-auto px-4 lg:px-8 space-y-6 animate-in slide-in-from-bottom-4 duration-500">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <button
             onClick={() => {
               navigate("/crm-dashboard");
@@ -761,10 +705,13 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
                 state: { from: "/crm-handle/" + claim.id },
               })
             }
-            className="flex items-center gap-2 text-indigo-600 hover:text-indigo-800 font-black text-[10px] uppercase tracking-widest transition-colors bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100"
+            className="flex items-center gap-2 text-emerald-700 hover:text-emerald-800 font-black text-[10px] uppercase tracking-widest transition-colors bg-emerald-100 px-3 py-1.5 rounded-lg border border-emerald-200"
           >
             <Eye size={14} /> View Patient Dashboard
           </button>
+          <h1 className="text-xl lg:text-2xl font-black uppercase tracking-tight text-slate-900 leading-tight">
+            {claim.formData?.hospitalName || claim.formData?.hospital_name || hospital?.hospitalName || 'Claim Hospital'}
+          </h1>
         </div>
 
         <div className="flex items-center gap-3">
@@ -826,7 +773,7 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
             <textarea rows={5} value={crmDecisionComment} onChange={(e) => setCrmDecisionComment(e.target.value)} placeholder="Add CRM action comment or justification..." className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
             <label className="block p-3 bg-blue-50 border border-blue-100 rounded-xl cursor-pointer"><div className="flex items-center gap-2 text-blue-700 text-[10px] font-black uppercase tracking-widest"><Upload size={15} /> Attach documents</div><p className="text-[10px] text-slate-500 mt-1">PDF, JPG, JPEG, or PNG — up to 25 MB each</p><input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" className="hidden" onChange={(event) => { const files = Array.from(event.target.files || []); const valid = files.filter((file) => /^(application\/pdf|image\/jpeg|image\/png)$/i.test(file.type) || /\.(pdf|jpe?g|png)$/i.test(file.name)); if (valid.length !== files.length) toast.error('Only PDF, JPG, JPEG, and PNG files are allowed.'); setCrmDecisionFiles((current) => [...current, ...valid]); event.currentTarget.value = ''; }} /></label>
             {crmDecisionFiles.length > 0 && <div className="space-y-1">{crmDecisionFiles.map((file, index) => <div key={`${file.name}-${index}`} className="flex items-center justify-between text-xs bg-slate-50 px-3 py-2 rounded-lg"><span className="truncate">{file.name}</span><button type="button" onClick={() => setCrmDecisionFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))} className="text-rose-600"><X size={14} /></button></div>)}</div>}
-            <button onClick={handleCrmComment} disabled={!crmDecisionComment.trim() || isSubmitting} className="w-full py-3 bg-[#000080] disabled:bg-slate-300 text-white rounded-xl font-black text-[10px] uppercase tracking-widest flex justify-center items-center gap-2"><ClipboardCheck size={15} />{isSubmitting ? 'Saving...' : 'Add Comment'}</button>
+            <button onClick={handleCrmComment} disabled={!crmDecisionComment.trim() || isSubmitting} className="w-full py-3 bg-[#000080] disabled:bg-slate-300 text-white rounded-xl font-black text-[10px] uppercase tracking-widest flex justify-center items-center gap-2"><ClipboardCheck size={15} />{isSubmitting ? 'Saving...' : 'Submit Decision'}</button>
           </div>
         </div>
 
@@ -878,7 +825,7 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
                         type="text"
                         disabled
                         readOnly
-                        value={fromEmail}
+                        value={isMailboxLoading ? 'Loading hospital mailbox…' : (fromEmail || 'No active hospital mailbox connected')}
                         className="w-full px-6 py-4 bg-slate-100 border border-slate-200 rounded-2xl text-sm font-bold text-slate-500 cursor-not-allowed select-none lowercase"
                       />
                     </div>
@@ -984,7 +931,7 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
                               Manage Attachments ({selectedDocs.length})
                             </h3>
                             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
-                              Select files to include in email
+                              Only documents from the latest eligible claim stage are available
                             </p>
                           </div>
                           <button
@@ -1062,17 +1009,6 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
                                     >
                                       <Eye size={16} />
                                     </button>
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleDeletePatientDoc(doc.id);
-                                      }}
-                                      className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
-                                      title="Delete Document"
-                                    >
-                                      <Trash2 size={16} />
-                                    </button>
                                   </div>
                                 </div>
                               );
@@ -1084,95 +1020,8 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
                           )}
                         </div>
 
-                        <div className="p-8 border-t border-slate-100 bg-slate-50/50">
-                          <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-slate-200 rounded-3xl hover:bg-white hover:border-blue-300 cursor-pointer transition-all group">
-                            <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                              <Upload className="w-8 h-8 text-slate-400 group-hover:text-blue-500 mb-2 transition-colors" />
-                              <p className="text-xs font-black text-slate-500 uppercase tracking-widest">
-                                Choose File to Upload
-                              </p>
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">
-                                PDF, JPG, PNG up to 10MB
-                              </p>
-                            </div>
-                            <input
-                              type="file"
-                              className="hidden"
-                              multiple
-                              onChange={async (e) => {
-                                const files = e.target.files;
-                                if (!files || !claim) return;
-
-                                for (let i = 0; i < files.length; i++) {
-                                  const file = files[i];
-                                  const reader = new FileReader();
-
-                                  reader.onload = async (event) => {
-                                    const base64 = event.target
-                                      ?.result as string;
-                                    try {
-                                      const newDocPayload: any = {
-                                        patientName: claim.patientName,
-                                        documentType: "Other",
-                                        fileName: file.name,
-                                        fileData: base64,
-                                        uploadedAt: new Date().toISOString(),
-                                        status: "Linked",
-                                        linkedClaimId: claim.id,
-                                        hospitalId:
-                                          claim.hospitalId ||
-                                          currentUser?.hospitalId ||
-                                          "default_hospital",
-                                      };
-
-                                      if (DISABLE_FIRESTORE) {
-                                        const localKey = "claimnx_patientDocuments";
-                                        let localDocs = [];
-                                        try {
-                                          localDocs = JSON.parse(
-                                            localStorage.getItem(localKey) || "[]",
-                                          );
-                                        } catch (err) {
-                                          localDocs = [];
-                                        }
-
-                                        const newDocWithId: any = {
-                                          ...newDocPayload,
-                                          id: `doc_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-                                        };
-                                        localDocs.push(newDocWithId);
-                                        localStorage.setItem(
-                                          localKey,
-                                          JSON.stringify(localDocs),
-                                        );
-
-                                        // Update state immediately
-                                        setPatientDocs((prev) => [
-                                          ...prev,
-                                          newDocWithId,
-                                        ]);
-                                        setSelectedDocs((prev) => [
-                                          ...prev,
-                                          newDocWithId,
-                                        ]);
-                                      } else {
-                                        await dualStorageService.save(
-                                          "patientDocuments",
-                                          newDocPayload,
-                                        );
-                                      }
-                                      toast.success(`Uploaded ${file.name}`);
-                                    } catch (err) {
-                                      toast.error(
-                                        `Failed to upload ${file.name}`,
-                                      );
-                                    }
-                                  };
-                                  reader.readAsDataURL(file);
-                                }
-                              }}
-                            />
-                          </label>
+                        <div className="p-5 border-t border-slate-100 bg-slate-50/50 text-center text-[10px] font-bold text-slate-500">
+                          To protect claim integrity, this email can include only attachments from the latest eligible workflow stage.
                         </div>
                         <div className="p-8 bg-slate-50 border-t border-slate-100 flex justify-end">
                           <button
@@ -1195,7 +1044,7 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
                     )}
                     <button
                       onClick={handleEmailSend}
-                      disabled={isSubmitting || !isSubmissionAllowed}
+                      disabled={isSubmitting || !isSubmissionAllowed || !hospitalMailbox || isMailboxLoading}
                       className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] shadow-xl shadow-blue-200 hover:bg-blue-700 transition-all active:scale-95 flex items-center gap-3 disabled:opacity-50"
                     >
                       {isSubmitting ? (
@@ -1236,12 +1085,8 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
                             if (insuranceEntity) {
                               if (payerCredential) {
                                 setPortalId(payerCredential.username || "");
-                                setPortalPassword(payerCredential.password || "");
                               } else {
                                 setPortalId(insuranceEntity.portalId || "");
-                                setPortalPassword(
-                                  insuranceEntity.portalPassword || "",
-                                );
                               }
                               setPortalLink((payerCredential as any)?.portalLink || insuranceEntity.portalLink || "");
                               toast.info(
@@ -1254,24 +1099,10 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
                         >
                           <History size={18} />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="p-2 hover:bg-white/10 rounded-lg transition-colors text-slate-400"
-                          title={
-                            showPassword ? "Hide Password" : "View Password"
-                          }
-                        >
-                          {showPassword ? (
-                            <EyeOff size={18} />
-                          ) : (
-                            <Eye size={18} />
-                          )}
-                        </button>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 gap-6">
                       <div className="space-y-2">
                         <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">
                           Portal Username
@@ -1283,19 +1114,10 @@ const CRMManualHandling: React.FC<CRMManualHandlingProps> = ({
                           className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-bold font-mono tracking-wider focus:bg-white/10 focus:border-blue-500/50 outline-none transition-all"
                         />
                       </div>
-                      <div className="space-y-2">
-                        <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">
-                          Portal Password
-                        </label>
-                        <div className="relative">
-                          <input
-                            type={showPassword ? "text" : "password"}
-                            value={portalPassword}
-                            onChange={(e) => setPortalPassword(e.target.value)}
-                            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm font-bold font-mono tracking-wider focus:bg-white/10 focus:border-blue-500/50 outline-none transition-all"
-                          />
-                        </div>
-                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-blue-400/20 bg-blue-500/10 px-4 py-3 text-[10px] font-bold leading-relaxed text-blue-100">
+                      Portal passwords are managed securely on the server and are never displayed or stored in this browser.
                     </div>
 
                     <div className="space-y-2">
