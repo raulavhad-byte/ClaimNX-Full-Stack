@@ -2,6 +2,11 @@ import { Module } from '@nestjs/common';
 import { EmailController } from './email.controller';
 import { EmailService } from './email.service';
 
+// Webhooks
+import { GmailWebhookController } from './webhooks/gmail-webhook.controller';
+import { MicrosoftWebhookController } from './webhooks/microsoft-webhook.controller';
+import { ZohoWebhookController } from './webhooks/zoho-webhook.controller';
+
 // Providers
 import { MailProviderFactory } from './providers/mail-provider.factory';
 import { GmailProvider } from './providers/gmail.provider';
@@ -17,26 +22,27 @@ import { EmailClassifierService } from './inbound/email-classifier.service';
 // Extraction & Workflow
 import { EmailDataExtractorService } from './extraction/email-data-extractor.service';
 import { EmailActionPolicyService } from './workflow/email-action-policy.service';
+import { EmailHumanReviewService } from './workflow/email-human-review.service';
 
 // Accounts, Outbound & Attachments
 import { MailAccountService } from './accounts/mail-account.service';
 import { MailAccountRepository } from './accounts/mail-account.repository';
-import { MailCredentialVaultService } from './accounts/mail-credential-vault.service';
-import { GmailOAuthService } from './accounts/gmail-oauth.service';
-import { ExternalOAuthService } from './accounts/external-oauth.service';
-import { YahooProvider } from './providers/yahoo.provider';
 import { ClaimEmailTemplateService } from './outbound/claim-email-template.service';
 import { EmailRecipientService } from './outbound/email-recipient.service';
 import { AttachmentSecurityService } from './attachments/attachment-security.service';
-import { OutboundAttachmentStorageService } from './attachments/outbound-attachment-storage.service';
-import { EmailCorrespondenceRepository } from './email-correspondence.repository';
-import { InboundEmailService } from './inbound/inbound-email.service';
-import { MailboxSyncStateRepository } from './jobs/mailbox-sync-state.repository';
-import { MailboxSyncService } from './jobs/mailbox-sync.service';
-import { GmailPushAuthenticator } from './webhooks/gmail-push-authenticator.service';
+
+// Jobs & Processors
+import { MailboxSyncProcessor } from './jobs/mailbox-sync.processor';
+import { InboundEmailProcessor } from './jobs/inbound-email.processor';
+import { OutboundEmailProcessor } from './jobs/outbound-email.processor';
 
 @Module({
-  controllers: [EmailController],
+  controllers: [
+    EmailController,
+    GmailWebhookController,
+    MicrosoftWebhookController,
+    ZohoWebhookController
+  ],
   providers: [
     EmailService,
     MailProviderFactory,
@@ -44,26 +50,20 @@ import { GmailPushAuthenticator } from './webhooks/gmail-push-authenticator.serv
     MicrosoftGraphProvider,
     ZohoMailProvider,
     ImapSmtpProvider,
-    YahooProvider,
     ClaimMatcherService,
     SenderValidationService,
     EmailClassifierService,
     EmailDataExtractorService,
     EmailActionPolicyService,
+    EmailHumanReviewService,
     MailAccountService,
     MailAccountRepository,
-    MailCredentialVaultService,
-    GmailOAuthService,
-    ExternalOAuthService,
     ClaimEmailTemplateService,
     EmailRecipientService,
     AttachmentSecurityService,
-    OutboundAttachmentStorageService,
-    EmailCorrespondenceRepository,
-    InboundEmailService,
-    MailboxSyncStateRepository,
-    MailboxSyncService,
-    GmailPushAuthenticator,
+    MailboxSyncProcessor,
+    InboundEmailProcessor,
+    OutboundEmailProcessor
   ],
   exports: [
     EmailService,
@@ -71,8 +71,8 @@ import { GmailPushAuthenticator } from './webhooks/gmail-push-authenticator.serv
     MailProviderFactory,
     ClaimMatcherService,
     EmailDataExtractorService,
-    InboundEmailService,
-    MailboxSyncService,
+    EmailHumanReviewService,
+    ClaimEmailTemplateService
   ]
 })
 export class EmailModule {}
